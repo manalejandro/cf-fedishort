@@ -1,0 +1,38 @@
+name = "cf-fedishort"
+main = "src/worker.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
+[vars]
+INSTANCE_TITLE = "FediShort"
+INSTANCE_DESCRIPTION = "Short links, federated."
+INSTANCE_VERSION = "1.0.0"
+INSTANCE_URL = "https://fedishort.com"
+NODE_ENV = "production"
+TURNSTILE_SITE_KEY = ""
+EMAIL_FROM = "noreply@fedishort.com"
+EMAIL_FROM_NAME = "FediShort"
+
+[[routes]]
+pattern = "fedishort.com"
+custom_domain = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cf-fedishort"
+database_id = ""
+
+[[queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "cf-fedishort-delivery"
+
+[[queues.consumers]]
+queue = "cf-fedishort-delivery"
+max_batch_size = 20
+max_batch_timeout = 5
+max_retries = 3
+
+[dev]
+port = 3000
+local_protocol = "http"
