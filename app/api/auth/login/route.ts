@@ -1,17 +1,35 @@
 import { type NextRequest } from "next/server";
 import { getCloudflareContext, json, badRequest } from "@/lib/cf";
-import { getActorByUsername } from "@/lib/db";
+import { getActorByUsername, getActorByEmail } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth";
 
 export async function POST(request: NextRequest): Promise<Response> {
   const { env } = getCloudflareContext();
-  const { username, password } = await request.json() as { username?: string; password?: string };
+  const { username, password, turnstileToken } = await request.json() as { username?: string; password?: string; turnstileToken?: string };
 
   if (!username || !password) return badRequest("Missing credentials");
 
-  const domain = new URL(request.url).hostname;
-  const actor = await getActorByUsername(env.DB, username.toLowerCase().trim(), domain);
+  if (!turnstileToken) return badRequest("Missing captcha verification");
 
+  const turnstileRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: env.TURNSTILE_SECRET_KEY,
+      response: turnstileToken,
+    }),
+  });
+  const turnstileData = await turnstileRes.json() as { success: boolean };
+  if (!turnstileData.success) return badRequest("Captcha verification failed");
+
+  const domain = new URL(request.url).hostname;
+  const input = username.toLowerCase().trim();
+
+  // Allow login by username or email
+  let actor = await getActorByUsername(env.DB, input, domain);
+  if (!actor && input.includes("@")) {
+    actor = await getActorByEmail(env.DB, input);
+  }
   if (!actor || !actor.passwordHash || !actor.isLocal)
     return json({ error: "Invalid credentials" }, 401);
 

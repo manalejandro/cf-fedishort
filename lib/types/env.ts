@@ -7,6 +7,31 @@ import type {
 
 export type { D1Database, KVNamespace, Queue, Fetcher };
 
+export interface EmailAddress {
+  email: string;
+  name?: string;
+}
+
+export interface EmailMessageBuilder {
+  to: string | EmailAddress | (string | EmailAddress)[];
+  from: string | EmailAddress;
+  subject: string;
+  html?: string;
+  text?: string;
+  cc?: string | EmailAddress | (string | EmailAddress)[];
+  bcc?: string | EmailAddress | (string | EmailAddress)[];
+  replyTo?: string | EmailAddress;
+  headers?: Record<string, string>;
+}
+
+export interface EmailSendResult {
+  messageId: string;
+}
+
+export interface SendEmail {
+  send(message: EmailMessageBuilder): Promise<EmailSendResult>;
+}
+
 export interface CloudflareEnv {
   DB: D1Database;
   KV: KVNamespace;
@@ -19,7 +44,7 @@ export interface CloudflareEnv {
   NODE_ENV: string;
   TURNSTILE_SITE_KEY: string;
   TURNSTILE_SECRET_KEY: string;
-  EMAIL_API_KEY?: string;
+  EMAIL?: SendEmail;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
 }

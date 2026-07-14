@@ -63,6 +63,23 @@ export type Dict = {
     registering: string;
     loginError: string;
     registerError: string;
+    forgotPassword: string;
+    forgotPasswordTitle: string;
+    forgotPasswordDesc: string;
+    forgotPasswordBtn: string;
+    forgotPasswordSent: string;
+    forgotPasswordEmailSent: string;
+    resetPasswordTitle: string;
+    resetPasswordBtn: string;
+    resetPasswordSuccess: string;
+    newPassword: string;
+    confirmNewPassword: string;
+    resendVerification: string;
+    resendVerificationSent: string;
+    emailVerified: string;
+    emailVerificationFailed: string;
+    checkEmail: string;
+    turnstileError: string;
   };
   profile: {
     title: string;
@@ -151,6 +168,23 @@ export const dicts: Record<Locale, Dict> = {
       registering: "Creating account...",
       loginError: "Invalid username or password",
       registerError: "Registration failed",
+      forgotPassword: "Forgot password?",
+      forgotPasswordTitle: "Reset your password",
+      forgotPasswordDesc: "Enter your email address and we'll send you a reset link.",
+      forgotPasswordBtn: "Send reset link",
+      forgotPasswordSent: "Check your email",
+      forgotPasswordEmailSent: "If that email is registered, you will receive a password reset link.",
+      resetPasswordTitle: "Set new password",
+      resetPasswordBtn: "Reset password",
+      resetPasswordSuccess: "Password has been reset successfully. You can now sign in.",
+      newPassword: "New password",
+      confirmNewPassword: "Confirm new password",
+      resendVerification: "Resend verification email",
+      resendVerificationSent: "If that email is registered, a new verification link will be sent.",
+      emailVerified: "Email verified! Your account is now active.",
+      emailVerificationFailed: "Verification failed. The link may be invalid or expired.",
+      checkEmail: "Check your email for the verification link.",
+      turnstileError: "Please complete the captcha verification.",
     },
     profile: {
       title: "Profile",
@@ -237,6 +271,23 @@ export const dicts: Record<Locale, Dict> = {
       registering: "Creando cuenta...",
       loginError: "Usuario o contraseña inválidos",
       registerError: "Registro fallido",
+      forgotPassword: "¿Olvidaste tu contraseña?",
+      forgotPasswordTitle: "Restablece tu contraseña",
+      forgotPasswordDesc: "Ingresa tu correo electrónico y te enviaremos un enlace de restablecimiento.",
+      forgotPasswordBtn: "Enviar enlace",
+      forgotPasswordSent: "Revisa tu correo",
+      forgotPasswordEmailSent: "Si ese correo está registrado, recibirás un enlace para restablecer tu contraseña.",
+      resetPasswordTitle: "Nueva contraseña",
+      resetPasswordBtn: "Restablecer contraseña",
+      resetPasswordSuccess: "Contraseña restablecida exitosamente. Ahora puedes iniciar sesión.",
+      newPassword: "Nueva contraseña",
+      confirmNewPassword: "Confirmar nueva contraseña",
+      resendVerification: "Reenviar verificación",
+      resendVerificationSent: "Si ese correo está registrado, se enviará un nuevo enlace de verificación.",
+      emailVerified: "¡Correo verificado! Tu cuenta ya está activa.",
+      emailVerificationFailed: "Verificación fallida. El enlace puede ser inválido o haber expirado.",
+      checkEmail: "Revisa tu correo para ver el enlace de verificación.",
+      turnstileError: "Por favor completa la verificación captcha.",
     },
     profile: {
       title: "Perfil",

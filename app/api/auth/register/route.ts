@@ -5,10 +5,12 @@ import { generateKeyPair } from "@/lib/activitypub/security";
 import { generateId } from "@/lib/activitypub/utils";
 import { hashPassword } from "@/lib/auth";
 import { sendVerificationEmail } from "@/lib/email";
+import { detectLocale } from "@/lib/i18n/dict";
 
 export async function POST(request: NextRequest): Promise<Response> {
   const { env } = getCloudflareContext();
   const { username, email, password, turnstileToken } = await request.json() as { username?: string; email?: string; password?: string; turnstileToken?: string };
+  const locale = detectLocale(request.headers.get("Accept-Language") ?? "");
 
   if (!username || !email || !password) return badRequest("Missing required fields");
 
@@ -61,14 +63,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}`;
 
-  await sendVerificationEmail(
-    email,
-    normalizedUsername,
-    verificationUrl,
-    env.EMAIL_FROM_NAME ?? "FediShort",
-    env.EMAIL_FROM ?? "noreply@fedishort.com",
-    env.EMAIL_API_KEY,
-  );
+  await sendVerificationEmail(email, normalizedUsername, verificationUrl, locale);
 
   return json({
     verified: false,

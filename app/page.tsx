@@ -69,6 +69,26 @@ const dict = {
     notifications: "Notifications",
     loggingIn: "Signing in...",
     registering: "Creating account...",
+    forgotPassword: "Forgot password?",
+    forgotPasswordTitle: "Reset your password",
+    forgotPasswordDesc: "Enter your email address and we'll send you a reset link.",
+    forgotPasswordBtn: "Send reset link",
+    forgotPasswordSent: "Check your email",
+    forgotPasswordEmailSent: "If that email is registered, you will receive a password reset link.",
+    resetPasswordTitle: "Set new password",
+    resetPasswordBtn: "Reset password",
+    resetPasswordSuccess: "Password has been reset successfully. You can now sign in.",
+    newPassword: "New password",
+    confirmNewPassword: "Confirm new password",
+    resendVerification: "Resend verification email",
+    resendVerificationSent: "If that email is registered, a new verification link will be sent.",
+    emailVerified: "Email verified! Your account is now active.",
+    emailVerificationFailed: "Verification failed. The link may be invalid or expired.",
+    checkEmail: "Check your email for the verification link.",
+    turnstileError: "Please complete the captcha verification.",
+    resetTokenExpired: "Invalid or expired reset link.",
+    backToLogin: "Back to sign in",
+    dismiss: "Dismiss",
   },
   es: {
     title: "FediShort",
@@ -134,6 +154,26 @@ const dict = {
     notifications: "Notificaciones",
     loggingIn: "Iniciando sesión...",
     registering: "Creando cuenta...",
+    forgotPassword: "¿Olvidaste tu contraseña?",
+    forgotPasswordTitle: "Restablece tu contraseña",
+    forgotPasswordDesc: "Ingresa tu correo electrónico y te enviaremos un enlace de restablecimiento.",
+    forgotPasswordBtn: "Enviar enlace",
+    forgotPasswordSent: "Revisa tu correo",
+    forgotPasswordEmailSent: "Si ese correo está registrado, recibirás un enlace para restablecer tu contraseña.",
+    resetPasswordTitle: "Nueva contraseña",
+    resetPasswordBtn: "Restablecer contraseña",
+    resetPasswordSuccess: "Contraseña restablecida exitosamente. Ahora puedes iniciar sesión.",
+    newPassword: "Nueva contraseña",
+    confirmNewPassword: "Confirmar nueva contraseña",
+    resendVerification: "Reenviar verificación",
+    resendVerificationSent: "Si ese correo está registrado, se enviará un nuevo enlace de verificación.",
+    emailVerified: "¡Correo verificado! Tu cuenta ya está activa.",
+    emailVerificationFailed: "Verificación fallida. El enlace puede ser inválido o haber expirado.",
+    checkEmail: "Revisa tu correo para ver el enlace de verificación.",
+    turnstileError: "Por favor completa la verificación captcha.",
+    resetTokenExpired: "Enlace de restablecimiento inválido o expirado.",
+    backToLogin: "Volver a iniciar sesión",
+    dismiss: "Descartar",
   },
 };
 
@@ -190,54 +230,119 @@ function Toggle({ locale, setLocale }: { locale: Locale; setLocale: (l: Locale) 
   );
 }
 
-function Nav({ d, locale, setLocale, token, username, logout, ctaKey, onRegistered }: { d: D; locale: Locale; setLocale: (l: Locale) => void; token: string | null; username: string | null; logout: () => void; ctaKey?: number; onRegistered?: () => void }) {
-  const [showAuth, setShowAuth] = useState(false);
-  const [showRegister, setShowRegister] = useState(false);
+function renderTurnstile(el: HTMLDivElement, cb: (token: string) => void): string {
+  const ts = (window as unknown as { turnstile?: { render: (el: string | HTMLElement, opts: Record<string, unknown>) => string } }).turnstile;
+  if (ts) {
+    return ts.render(el, {
+      sitekey: "0x4AAAAAADzhx7-iwaum1vmJ",
+      callback: (token: string) => cb(token),
+    });
+  }
+  return "";
+}
 
-  useEffect(() => {
-    if (ctaKey && ctaKey > 0) { setShowAuth(true); setShowRegister(true); setUsernameInput(""); setEmail(""); setPassword(""); setConfirmPassword(""); setAuthError(""); }
-  }, [ctaKey]);
+function removeTurnstile(id: string) {
+  const ts = (window as unknown as { turnstile?: { remove: (id: string) => void } }).turnstile;
+  ts?.remove(id);
+}
+
+function AuthModal({
+  d,
+  showAuth,
+  setShowAuth,
+  showRegister,
+  setShowRegister,
+  onRegistered,
+}: {
+  d: D;
+  showAuth: boolean;
+  setShowAuth: (v: boolean) => void;
+  showRegister: boolean;
+  setShowRegister: (v: boolean) => void;
+  onRegistered: () => void;
+}) {
+  const [usernameInput, setUsernameInput] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [usernameInput, setUsernameInput] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
-  const turnstileRef = useRef<HTMLDivElement>(null);
+  const [turnstileReady, setTurnstileReady] = useState(false);
+  const turnstileRegRef = useRef<HTMLDivElement>(null);
+  const turnstileLoginRef = useRef<HTMLDivElement>(null);
+  const regWidgetId = useRef<string>("");
+  const loginWidgetId = useRef<string>("");
+
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+
+  const [showResend, setShowResend] = useState(false);
+  const [resendEmail, setResendEmail] = useState("");
+  const [resendSent, setResendSent] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+
+  const resetTurnstile = () => {
+    const ts = (window as unknown as { turnstile?: { reset: (id: string) => void } }).turnstile;
+    if (regWidgetId.current) { ts?.reset(regWidgetId.current); }
+    if (loginWidgetId.current) { ts?.reset(loginWidgetId.current); }
+    setTurnstileToken("");
+  };
 
   useEffect(() => {
-    let widgetId: string | undefined;
-    if (showAuth && showRegister && turnstileRef.current && !widgetId) {
-      const script = document.createElement("script");
-      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
-      script.async = true;
-      script.defer = true;
-      script.onload = () => {
-        const ts = (window as unknown as { turnstile?: { render: (el: string | HTMLElement, opts: Record<string, unknown>) => string } }).turnstile;
-        if (ts && turnstileRef.current) {
-          widgetId = ts.render(turnstileRef.current, {
-            sitekey: "0x4AAAAAADzhx7-iwaum1vmJ",
-            callback: (token: string) => setTurnstileToken(token),
-          });
-        }
-      };
-      document.head.appendChild(script);
+    if (!showAuth) {
+      setUsernameInput(""); setEmail(""); setPassword("");
+      setConfirmPassword(""); setAuthError(""); setTurnstileToken("");
+      setShowForgot(false); setForgotSent(false);
+      setShowResend(false); setResendSent(false);
+      return;
+    }
+  }, [showAuth]);
+
+  useEffect(() => {
+    if (document.querySelector('script[src*="turnstile"]')) {
+      setTurnstileReady(true);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setTurnstileReady(true);
+    document.head.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    if (!turnstileReady) return;
+    if (showAuth && showRegister && turnstileRegRef.current && !regWidgetId.current) {
+      const id = renderTurnstile(turnstileRegRef.current, (token) => setTurnstileToken(token));
+      if (id) regWidgetId.current = id;
     }
     return () => {
-      if (widgetId) {
-        const ts = (window as unknown as { turnstile?: { remove: (id: string) => void } }).turnstile;
-        ts?.remove(widgetId);
-      }
+      if (regWidgetId.current) { removeTurnstile(regWidgetId.current); regWidgetId.current = ""; }
     };
-  }, [showAuth, showRegister]);
+  }, [showAuth, showRegister, turnstileReady]);
+
+  useEffect(() => {
+    if (!turnstileReady) return;
+    if (showAuth && !showRegister && !showForgot && !showResend && turnstileLoginRef.current && !loginWidgetId.current) {
+      const id = renderTurnstile(turnstileLoginRef.current, (token) => setTurnstileToken(token));
+      if (id) loginWidgetId.current = id;
+    }
+    return () => {
+      if (loginWidgetId.current) { removeTurnstile(loginWidgetId.current); loginWidgetId.current = ""; }
+    };
+  }, [showAuth, showRegister, showForgot, showResend, turnstileReady]);
 
   const handleAuth = async () => {
+    if (!turnstileToken) { setAuthError(d.turnstileError); return; }
     setLoading(true); setAuthError("");
     try {
       const endpoint = showRegister ? "/api/auth/register" : "/api/auth/login";
-      const body: Record<string, string> = { username: usernameInput, password };
-      if (showRegister) { body.email = email; body.confirmPassword = confirmPassword; body.turnstileToken = turnstileToken; }
+      const body: Record<string, string> = { username: usernameInput, password, turnstileToken };
+      if (showRegister) { body.email = email; body.confirmPassword = confirmPassword; }
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -245,13 +350,19 @@ function Nav({ d, locale, setLocale, token, username, logout, ctaKey, onRegister
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await res.json();
-      if (!res.ok) { setAuthError(data.error || "Error"); return; }
+      if (!res.ok) {
+        if (res.status === 403) {
+          setResendEmail(email || usernameInput);
+          setShowResend(true);
+        }
+        setAuthError(data.error || "Error");
+        resetTurnstile();
+        return;
+      }
       if (showRegister && data.verified === false) {
         setShowAuth(false);
-        setUsernameInput("");
-        setPassword("");
-        setConfirmPassword("");
-        setEmail("");
+        setUsernameInput(""); setPassword("");
+        setConfirmPassword(""); setEmail("");
         onRegistered?.();
         return;
       }
@@ -259,46 +370,115 @@ function Nav({ d, locale, setLocale, token, username, logout, ctaKey, onRegister
       localStorage.setItem("fs_username", data.username);
       localStorage.setItem("fs_actorId", data.actorId);
       window.location.reload();
-    } catch { setAuthError("Network error"); }
+    } catch { setAuthError("Network error"); resetTurnstile(); }
     finally { setLoading(false); }
   };
 
+  const handleForgotPassword = async () => {
+    setForgotLoading(true);
+    try {
+      await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      setForgotSent(true);
+    } catch { setAuthError("Network error"); }
+    finally { setForgotLoading(false); }
+  };
+
+  const handleResend = async () => {
+    setResendLoading(true);
+    try {
+      await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resendEmail }),
+      });
+      setResendSent(true);
+    } catch { /* ignore */ }
+    finally { setResendLoading(false); }
+  };
+
+  const close = () => { setShowAuth(false); };
+
+  if (!showAuth) return null;
+
   return (
-    <>
-      <nav className="sticky top-0 z-50 backdrop-blur-xl bg-background/80 border-b border-border">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2.5 group">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm group-hover:scale-105 transition-transform">
-              F
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={close}>
+      <div className="bg-card border border-border rounded-2xl p-8 w-full max-w-md mx-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        {showResend ? (
+          <>
+            <h2 className="text-2xl font-bold mb-2">{d.resendVerification}</h2>
+            <p className="text-sm text-muted mb-6">Please verify your email before signing in.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted mb-1.5 block">{d.email}</label>
+                <input
+                  value={resendEmail}
+                  onChange={(e) => setResendEmail(e.target.value)}
+                  placeholder={d.emailPlaceholder}
+                  type="email"
+                  className="w-full px-4 py-2.5 rounded-xl bg-secondary border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors"
+                />
+              </div>
+              {resendSent ? (
+                <p className="text-sm text-primary">{d.resendVerificationSent}</p>
+              ) : (
+                <button
+                  onClick={handleResend}
+                  disabled={resendLoading}
+                  className="w-full py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
+                >
+                  {resendLoading ? "..." : d.resendVerification}
+                </button>
+              )}
+              <p className="text-center text-sm text-muted">
+                <button onClick={() => { setShowResend(false); setResendSent(false); }} className="text-primary hover:underline">{d.backToLogin}</button>
+              </p>
             </div>
-            <span className="font-semibold text-lg">{d.title}</span>
-          </a>
-
-          <div className="flex items-center gap-3">
-            <Toggle locale={locale} setLocale={setLocale} />
-            {token ? (
-              <>
-                <a href="/search" className="text-sm text-muted hover:text-foreground transition-colors">{d.search}</a>
-                <a href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors relative">
-                  {d.notifications}
-                </a>
-                <a href={`/users/${username}`} className="text-sm text-muted hover:text-foreground transition-colors">{username}</a>
-                <a href="/links" className="px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors">{d.myLinks}</a>
-                <button onClick={logout} className="text-sm text-muted hover:text-error transition-colors">{d.logout}</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => { setShowAuth(true); setShowRegister(false); }} className="text-sm text-muted hover:text-foreground transition-colors">{d.login}</button>
-                <button onClick={() => { setShowAuth(true); setShowRegister(true); }} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors">{d.register}</button>
-              </>
-            )}
-          </div>
-        </div>
-      </nav>
-
-      {showAuth && !token && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => { setShowAuth(false); setUsernameInput(""); setEmail(""); setPassword(""); setConfirmPassword(""); setAuthError(""); }}>
-          <div className="bg-card border border-border rounded-2xl p-8 w-full max-w-md mx-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+          </>
+        ) : showForgot ? (
+          <>
+            <h2 className="text-2xl font-bold mb-2">{d.forgotPasswordTitle}</h2>
+            <p className="text-sm text-muted mb-6">{d.forgotPasswordDesc}</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted mb-1.5 block">{d.email}</label>
+                <input
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder={d.emailPlaceholder}
+                  type="email"
+                  className="w-full px-4 py-2.5 rounded-xl bg-secondary border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors"
+                />
+              </div>
+              {forgotSent ? (
+                <>
+                  <p className="text-sm text-primary">{d.forgotPasswordEmailSent}</p>
+                  <p className="text-center text-sm text-muted">
+                    <button onClick={() => { setShowForgot(false); setForgotSent(false); }} className="text-primary hover:underline">{d.backToLogin}</button>
+                  </p>
+                </>
+              ) : (
+                <>
+                  {authError && <p className="text-error text-sm">{authError}</p>}
+                  <button
+                    onClick={handleForgotPassword}
+                    disabled={forgotLoading}
+                    className="w-full py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
+                  >
+                    {forgotLoading ? "..." : d.forgotPasswordBtn}
+                  </button>
+                  <p className="text-center text-sm text-muted">
+                    <button onClick={() => { setShowForgot(false); }} className="text-primary hover:underline">{d.backToLogin}</button>
+                  </p>
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
             <h2 className="text-2xl font-bold mb-6">{showRegister ? d.registerTitle : d.loginTitle}</h2>
             <div className="space-y-4">
               <div>
@@ -344,7 +524,8 @@ function Nav({ d, locale, setLocale, token, username, logout, ctaKey, onRegister
                   />
                 </div>
               )}
-              {showRegister && <div ref={turnstileRef} className="flex justify-center my-3" />}
+              {showRegister && <div ref={turnstileRegRef} className="flex justify-center my-3" />}
+              {!showRegister && <div ref={turnstileLoginRef} className="flex justify-center my-3" />}
               {authError && <p className="text-error text-sm">{authError}</p>}
               <button
                 onClick={handleAuth}
@@ -353,17 +534,22 @@ function Nav({ d, locale, setLocale, token, username, logout, ctaKey, onRegister
               >
                 {loading ? (showRegister ? d.registering : d.loggingIn) : (showRegister ? d.registerBtn : d.loginBtn)}
               </button>
+              {!showRegister && (
+                <p className="text-center text-sm text-muted">
+                  <button onClick={() => { setShowForgot(true); setAuthError(""); }} className="text-primary hover:underline">{d.forgotPassword}</button>
+                </p>
+              )}
               <p className="text-center text-sm text-muted">
                 {showRegister ? d.haveAccount : d.noAccount}{" "}
-                <button onClick={() => setShowRegister(!showRegister)} className="text-primary hover:underline">
+                <button onClick={() => { setShowRegister(!showRegister); setAuthError(""); setTurnstileToken(""); }} className="text-primary hover:underline">
                   {showRegister ? d.login : d.register}
                 </button>
               </p>
             </div>
-          </div>
-        </div>
-      )}
-    </>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -386,6 +572,12 @@ export default function Home() {
 
   const [justRegistered, setJustRegistered] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState<{ ok?: boolean; reason?: string }>({});
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const [resetDone, setResetDone] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -401,6 +593,13 @@ export default function Home() {
       const url = new URL(window.location.href);
       url.searchParams.delete("verified");
       url.searchParams.delete("reason");
+      window.history.replaceState({}, "", url.toString());
+    }
+    const rt = params.get("reset-token");
+    if (rt) {
+      setResetToken(rt);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("reset-token");
       window.history.replaceState({}, "", url.toString());
     }
   }, []);
@@ -454,44 +653,158 @@ export default function Home() {
     finally { setDeleting(null); }
   };
 
+  const handleResetPassword = async () => {
+    if (resetPassword.length < 8) { setResetError("Password must be at least 8 characters"); return; }
+    if (resetPassword !== resetConfirmPassword) { setResetError("Passwords do not match"); return; }
+    setResetting(true); setResetError("");
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: resetPassword }),
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await res.json();
+      if (!res.ok) { setResetError(data.error || "Error"); return; }
+      setResetDone(true);
+    } catch { setResetError("Network error"); }
+    finally { setResetting(false); }
+  };
+
   const token = typeof window !== "undefined" ? localStorage.getItem("fs_token") : null;
+  const username = typeof window !== "undefined" ? localStorage.getItem("fs_username") : null;
+
+  const [showAuth, setShowAuth] = useState(false);
+  const [showRegister, setShowRegister] = useState(false);
+
+  useEffect(() => {
+    if (ctaKey && ctaKey > 0) { setShowAuth(true); setShowRegister(true); }
+  }, [ctaKey]);
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Nav d={d} locale={locale} setLocale={setLocale} token={token} username={typeof window !== "undefined" ? localStorage.getItem("fs_username") : null} logout={() => { localStorage.clear(); window.location.reload(); }} ctaKey={ctaKey} onRegistered={() => setJustRegistered(true)} />
+      <nav className="sticky top-0 z-50 backdrop-blur-xl bg-background/80 border-b border-border">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <a href="/" className="flex items-center gap-2.5 group">
+            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm group-hover:scale-105 transition-transform">
+              F
+            </div>
+            <span className="font-semibold text-lg">{d.title}</span>
+          </a>
+
+          <div className="flex items-center gap-3">
+            <Toggle locale={locale} setLocale={setLocale} />
+            {token ? (
+              <>
+                <a href="/search" className="text-sm text-muted hover:text-foreground transition-colors">{d.search}</a>
+                <a href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors relative">
+                  {d.notifications}
+                </a>
+                <a href={`/users/${username}`} className="text-sm text-muted hover:text-foreground transition-colors">{username}</a>
+                <a href="/links" className="px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors">{d.myLinks}</a>
+                <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="text-sm text-muted hover:text-error transition-colors">{d.logout}</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => { setShowAuth(true); setShowRegister(false); }} className="text-sm text-muted hover:text-foreground transition-colors">{d.login}</button>
+                <button onClick={() => { setShowAuth(true); setShowRegister(true); }} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors">{d.register}</button>
+              </>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      <AuthModal
+        d={d}
+        showAuth={showAuth}
+        setShowAuth={setShowAuth}
+        showRegister={showRegister}
+        setShowRegister={setShowRegister}
+        onRegistered={() => setJustRegistered(true)}
+      />
 
       <main className="flex-1">
+        {resetToken && !resetDone && (
+          <div className="max-w-lg mx-auto mt-6 px-4">
+            <div className="bg-card border border-border rounded-2xl p-8">
+              <h2 className="text-2xl font-bold mb-2">{d.resetPasswordTitle}</h2>
+              <div className="space-y-4 mt-6">
+                <div>
+                  <label className="text-sm text-muted mb-1.5 block">{d.newPassword}</label>
+                  <input
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    placeholder={d.passwordPlaceholder}
+                    type="password"
+                    className="w-full px-4 py-2.5 rounded-xl bg-secondary border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-muted mb-1.5 block">{d.confirmNewPassword}</label>
+                  <input
+                    value={resetConfirmPassword}
+                    onChange={(e) => setResetConfirmPassword(e.target.value)}
+                    placeholder={d.passwordPlaceholder}
+                    type="password"
+                    className="w-full px-4 py-2.5 rounded-xl bg-secondary border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors"
+                  />
+                </div>
+                {resetError && <p className="text-error text-sm">{resetError}</p>}
+                <button
+                  onClick={handleResetPassword}
+                  disabled={resetting}
+                  className="w-full py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-hover transition-colors disabled:opacity-50"
+                >
+                  {resetting ? "..." : d.resetPasswordBtn}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {resetDone && (
+          <div className="max-w-lg mx-auto mt-6 px-4">
+            <div className="rounded-xl bg-green-500/10 border border-green-500/20 p-4 text-center">
+              <p className="text-green-500 font-semibold">{d.resetPasswordSuccess}</p>
+              <button
+                onClick={() => { setResetToken(null); setResetDone(false); setShowAuth(true); setShowRegister(false); }}
+                className="mt-2 text-sm text-primary hover:underline"
+              >
+                {d.loginBtn}
+              </button>
+            </div>
+          </div>
+        )}
         {justRegistered && (
           <div className="max-w-lg mx-auto mt-6 px-4">
             <div className="rounded-xl bg-primary/10 border border-primary/20 p-4 text-center">
-              <p className="text-primary font-semibold">Account created!</p>
-              <p className="text-sm text-muted mt-1">Check your email for a verification link.</p>
-              <button onClick={() => setJustRegistered(false)} className="mt-2 text-xs text-muted hover:text-foreground underline">Dismiss</button>
+              <p className="text-primary font-semibold">{d.registerTitle}</p>
+              <p className="text-sm text-muted mt-1">{d.checkEmail}</p>
+              <button onClick={() => setJustRegistered(false)} className="mt-2 text-xs text-muted hover:text-foreground underline">{d.dismiss}</button>
             </div>
           </div>
         )}
         {verificationStatus.ok && (
           <div className="max-w-lg mx-auto mt-6 px-4">
             <div className="rounded-xl bg-green-500/10 border border-green-500/20 p-4 text-center">
-              <p className="text-green-500 font-semibold">Email verified!</p>
-              <p className="text-sm text-muted mt-1">Your account is now active. You can sign in.</p>
-              <button onClick={() => setVerificationStatus({})} className="mt-2 text-xs text-muted hover:text-foreground underline">Dismiss</button>
+              <p className="text-green-500 font-semibold">{d.emailVerified}</p>
+              <button
+                onClick={() => { setVerificationStatus({}); setShowAuth(true); setShowRegister(false); }}
+                className="mt-2 text-sm text-primary hover:underline"
+              >
+                {d.loginBtn}
+              </button>
             </div>
           </div>
         )}
         {verificationStatus.ok === false && (
           <div className="max-w-lg mx-auto mt-6 px-4">
             <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4 text-center">
-              <p className="text-red-500 font-semibold">Verification failed</p>
-              <p className="text-sm text-muted mt-1">
-                {verificationStatus.reason === "missing-token" ? "No verification token provided." :
-                 verificationStatus.reason === "invalid-token" ? "Invalid or expired verification link." :
-                 "Could not verify your email. The link may be expired."}
-              </p>
-              <button onClick={() => setVerificationStatus({})} className="mt-2 text-xs text-muted hover:text-foreground underline">Dismiss</button>
+              <p className="text-red-500 font-semibold">{d.emailVerificationFailed}</p>
+              <button onClick={() => setVerificationStatus({})} className="mt-2 text-xs text-muted hover:text-foreground underline">{d.dismiss}</button>
             </div>
           </div>
         )}
+
         {/* Hero */}
         <section className="relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent pointer-events-none" />

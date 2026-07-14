@@ -236,6 +236,50 @@ export async function isEmailVerified(db: D1Database, actorId: string): Promise<
   return row?.email_verified === 1;
 }
 
+export async function setPasswordResetToken(
+  db: D1Database,
+  actorId: string
+): Promise<string> {
+  const token = crypto.randomUUID();
+  await db
+    .prepare("UPDATE actors SET password_reset_token = ?, password_reset_expires_at = datetime('now', '+1 hour') WHERE id = ?")
+    .bind(token, actorId)
+    .run();
+  return token;
+}
+
+export async function getActorByPasswordResetToken(
+  db: D1Database,
+  token: string
+): Promise<LocalActor | null> {
+  const row = await db
+    .prepare("SELECT * FROM actors WHERE password_reset_token = ? AND password_reset_expires_at > datetime('now')")
+    .bind(token)
+    .first();
+  return row ? rowToActor(row) : null;
+}
+
+export async function updateActorPassword(
+  db: D1Database,
+  actorId: string,
+  passwordHash: string
+): Promise<void> {
+  await db
+    .prepare("UPDATE actors SET password_hash = ?, password_reset_token = NULL, password_reset_expires_at = NULL, updated_at = datetime('now') WHERE id = ?")
+    .bind(passwordHash, actorId)
+    .run();
+}
+
+export async function clearPasswordResetToken(
+  db: D1Database,
+  actorId: string
+): Promise<void> {
+  await db
+    .prepare("UPDATE actors SET password_reset_token = NULL, password_reset_expires_at = NULL WHERE id = ?")
+    .bind(actorId)
+    .run();
+}
+
 // ─────────────────────────────────────────
 // Short Links
 // ─────────────────────────────────────────

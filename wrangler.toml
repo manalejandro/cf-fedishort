@@ -14,6 +14,9 @@ TURNSTILE_SITE_KEY = ""
 EMAIL_FROM = "noreply@fedishort.com"
 EMAIL_FROM_NAME = "FediShort"
 
+[[send_email]]
+name = "EMAIL"
+
 [[routes]]
 pattern = "fedishort.com"
 custom_domain = true
