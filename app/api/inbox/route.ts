@@ -1,19 +1,37 @@
 import { type NextRequest } from "next/server";
 import { getCloudflareContext, json } from "@/lib/cf";
 import { processInboxActivity } from "@/lib/activitypub/inbox";
-import { verifySignature, extractSigningKeyId } from "@/lib/activitypub/security";
-import { fetchRemoteObject } from "@/lib/activitypub/federation";
+import { extractSigningKeyId } from "@/lib/activitypub/security";
+import { purgeGoneSignerData, verifyIncomingSignature } from "@/lib/activitypub/signer-key";
 import { getActorById, getActorByUsername } from "@/lib/db";
-import type { APActor } from "@/lib/types";
 
+// 1 MB is far above any legitimate AP activity we accept.
+const MAX_BODY_BYTES = 1_000_000;
+
+// POST /inbox — Shared inbox for federation delivery
 export async function POST(request: NextRequest): Promise<Response> {
   const { env } = getCloudflareContext();
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
 
-  const rawBody = await request.text();
+  // Read body as text so we can parse JSON ourselves (needed for digest
+  // verification without a second read).
+  let rawBody: string;
+  try {
+    rawBody = await request.text();
+  } catch {
+    return json({ error: "Could not read request body" }, 400);
+  }
+  if (rawBody.length > MAX_BODY_BYTES) {
+    return json({ error: "Payload too large" }, 413);
+  }
+
   let body: Record<string, unknown>;
-  try { body = JSON.parse(rawBody); } catch { return json({ error: "Invalid JSON" }, 400); }
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
 
   const actorId = typeof body.actor === "string" ? body.actor : (body.actor as { id?: string })?.id;
   if (!actorId) return json({ error: "Missing actor" }, 400);
@@ -21,52 +39,65 @@ export async function POST(request: NextRequest): Promise<Response> {
   const headers: Record<string, string> = {};
   request.headers.forEach((v, k) => { headers[k] = v; });
 
+  // The HTTP Signature's keyId identifies the actor that actually signed the
+  // request. Always verify against the signing actor.
   const sigKeyId = extractSigningKeyId(headers);
   const signingActorId = sigKeyId ? sigKeyId.replace(/#.*$/, "") : actorId;
 
+  // Local signing key used by the activity handlers for outbound fetches.
   let signingKey: { id: string; privateKeyPem: string } | undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const localRow = await (env.DB as any).prepare("SELECT id, private_key_pem FROM actors WHERE is_local = 1 AND private_key_pem IS NOT NULL LIMIT 1").first();
-    if (localRow?.private_key_pem) signingKey = { id: localRow.id, privateKeyPem: localRow.private_key_pem };
-  } catch { /* ignore */ }
-
-  let senderActor: APActor | null = null;
-  try {
-    const cached = await getActorById(env.DB, signingActorId);
-    if (cached?.publicKeyPem) {
-      senderActor = {
-        id: cached.id, type: "Person", preferredUsername: cached.username,
-        inbox: cached.inbox ?? `${signingActorId}/inbox`, outbox: `${signingActorId}/outbox`,
-        followers: `${signingActorId}/followers`, following: `${signingActorId}/following`,
-        publicKey: { id: sigKeyId ?? `${signingActorId}#main-key`, owner: signingActorId, publicKeyPem: cached.publicKeyPem },
-      } as APActor;
-    } else {
-      const fetched = await fetchRemoteObject(signingActorId, signingKey ? `${signingKey.id}#main-key` : undefined, signingKey?.privateKeyPem) as APActor | null;
-      if (fetched?.publicKey?.publicKeyPem) {
-        senderActor = fetched;
-        try {
-          const upDomain = new URL(fetched.id).hostname;
-          await env.DB
-            .prepare("INSERT OR REPLACE INTO actors (id, username, domain, display_name, summary, avatar_url, header_url, public_key_pem, inbox, is_local, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))")
-            .bind(fetched.id, fetched.preferredUsername, upDomain, fetched.name ?? null, fetched.summary ?? null, fetched.icon?.url ?? null, fetched.image?.url ?? null, fetched.publicKey.publicKeyPem, fetched.inbox ?? null)
-            .run();
-        } catch { /* ignore */ }
-      }
+    const localRow = await env.DB
+      .prepare("SELECT id, private_key_pem FROM actors WHERE is_local = 1 AND private_key_pem IS NOT NULL LIMIT 1")
+      .first<{ id: string; private_key_pem: string }>();
+    if (localRow?.private_key_pem) {
+      signingKey = { id: localRow.id, privateKeyPem: localRow.private_key_pem };
     }
   } catch { /* ignore */ }
 
-  if (!senderActor?.publicKey?.publicKeyPem) return json({ error: "Cannot verify signature" }, 401);
+  const check = await verifyIncomingSignature(env.DB, {
+    method: "POST",
+    url: `${baseUrl}/inbox`,
+    headers,
+    body: rawBody,
+    signingKeyId: sigKeyId ?? `${actorId}#main-key`,
+    signingKey,
+  });
+  if (!check.ok) {
+    const activityType = typeof body.type === "string" ? body.type.toLowerCase() : "";
+    const activityObject = body.object;
+    const activityObjectId = typeof activityObject === "string" ? activityObject : (activityObject as { id?: string } | undefined)?.id ?? "";
 
-  const dateHeader = headers["date"];
-  if (dateHeader) {
-    const requestDate = new Date(dateHeader);
-    if (isNaN(requestDate.getTime()) || Math.abs(Date.now() - requestDate.getTime()) > 12 * 36e5)
-      return json({ error: "Request date too old" }, 401);
+    // An unverifiable `Delete` from an account the origin reports as gone can
+    // only remove data (or nothing at all), so treat it as a delivered no-op.
+    if (check.reason === "gone" && activityType === "delete") {
+      const purged = await purgeGoneSignerData(env.DB, check, signingActorId);
+      if (purged) console.warn(`[inbox] purged cached copy of gone actor ${signingActorId}`);
+      return json({ status: "accepted" }, 202);
+    }
+
+    // A `Delete` whose signer key cannot be fetched right now can still be a
+    // no-op when neither the signer nor the target object is cached. Anything
+    // cached stays retryable: an unverifiable Delete must never remove data.
+    if (check.reason === "no-key" && activityType === "delete" && activityObjectId) {
+      const [signer, target] = await Promise.all([
+        getActorById(env.DB, signingActorId).catch(() => null),
+        env.DB.prepare("SELECT id FROM objects WHERE id = ?").bind(activityObjectId).first().catch(() => null),
+      ]);
+      if (!signer && !target) return json({ status: "accepted" }, 202);
+    }
+
+    const detail = check.status ? ` (HTTP ${check.status})` : "";
+    console.warn(
+      `[inbox] ${check.reason} for ${signingActorId}${detail} type=${activityType || "?"}` +
+      `${activityObjectId ? ` object=${activityObjectId}` : ""}`
+    );
+    // `no-key` is retryable (503) so the sender retries with backoff instead of
+    // dropping the activity; a gone key or a bad signature is permanent (401).
+    return check.reason === "no-key"
+      ? json({ error: "Cannot verify signature: no public key" }, 503)
+      : json({ error: "Invalid HTTP signature" }, 401);
   }
-
-  const valid = await verifySignature("POST", `${baseUrl}/inbox`, headers, senderActor.publicKey.publicKeyPem, rawBody);
-  if (!valid) return json({ error: "Invalid signature" }, 401);
 
   let recipient: { id: string; username: string; privateKeyPem: string } | null = null;
 
@@ -82,12 +113,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   }
 
-  await processInboxActivity(body as never, {
-    db: env.DB,
-    baseUrl,
-    ...(recipient ? { recipient } : {}),
-    signingKey,
-  });
+  try {
+    await processInboxActivity(body as never, {
+      db: env.DB,
+      baseUrl,
+      signingActorId,
+      signingKey,
+      ...(recipient ? { recipient } : {}),
+    });
+  } catch {
+    // Still return 202 so the remote server does not keep retrying.
+  }
 
   return json({ status: "accepted" }, 202);
 }

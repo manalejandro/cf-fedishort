@@ -119,7 +119,14 @@ export async function POST(
           };
           const inboxes = await collectFollowerInboxes(followerIds, fetchActorFn);
           if (inboxes.length > 0) {
-            await enqueueDeliveries(env.DELIVERY_QUEUE, inboxes, JSON.stringify(create), actor.id);
+            await enqueueDeliveries(
+              env.DELIVERY_QUEUE,
+              inboxes,
+              JSON.stringify(create),
+              actor.id,
+              `${actor.id}#main-key`,
+              actor.privateKeyPem
+            );
           }
         }
       }

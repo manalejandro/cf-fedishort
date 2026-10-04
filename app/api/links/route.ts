@@ -103,7 +103,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       const fetchActorFn = async (id: string) => getActorById(env.DB, id);
       const inboxes = await collectFollowerInboxes(followerIds, fetchActorFn);
       if (inboxes.length > 0) {
-        await enqueueDeliveries(env.DELIVERY_QUEUE, inboxes, JSON.stringify(create), session.id);
+        await enqueueDeliveries(
+          env.DELIVERY_QUEUE,
+          inboxes,
+          JSON.stringify(create),
+          session.id,
+          `${actor.id}#main-key`,
+          actor.privateKeyPem
+        );
       }
     }
   }
