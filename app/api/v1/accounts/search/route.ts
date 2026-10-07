@@ -36,12 +36,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         const byId = await env.DB.prepare("SELECT id FROM actors WHERE id = ?").bind(actorUrl).first() as { id: string } | null;
         if (!byId) {
           // Fetch and cache the remote actor
-          const fetched = await fetchRemoteObject(actorUrl) as { id: string; preferredUsername: string; inbox?: string; name?: string; summary?: string; icon?: { url?: string }; image?: { url?: string }; publicKey?: { publicKeyPem: string } } | null;
+          const fetched = await fetchRemoteObject(actorUrl) as { id: string; preferredUsername: string; inbox?: string; endpoints?: { sharedInbox?: string }; name?: string; summary?: string; icon?: { url?: string }; image?: { url?: string }; publicKey?: { publicKeyPem: string } } | null;
           if (fetched?.publicKey?.publicKeyPem) {
             const fetchedDomain = new URL(fetched.id).hostname;
             await env.DB
-              .prepare("INSERT OR REPLACE INTO actors (id, username, domain, display_name, summary, avatar_url, header_url, public_key_pem, inbox, is_local, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))")
-              .bind(fetched.id, fetched.preferredUsername, fetchedDomain, fetched.name ?? null, fetched.summary ?? null, fetched.icon?.url ?? null, fetched.image?.url ?? null, fetched.publicKey.publicKeyPem, fetched.inbox ?? null)
+              .prepare("INSERT OR REPLACE INTO actors (id, username, domain, display_name, summary, avatar_url, header_url, public_key_pem, inbox, shared_inbox, is_local, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))")
+              .bind(fetched.id, fetched.preferredUsername, fetchedDomain, fetched.name ?? null, fetched.summary ?? null, fetched.icon?.url ?? null, fetched.image?.url ?? null, fetched.publicKey.publicKeyPem, fetched.inbox ?? null, fetched.endpoints?.sharedInbox ?? null)
               .run();
           }
         }
