@@ -1,9 +1,9 @@
 // Cloudflare Worker entry point.
-// After building with `opennextjs-cloudflare build`, the generated
-// .open-next/worker.js is used as the main handler.
-// This file exports the Queue consumer for ActivityPub delivery.
+// Wraps the vinext app handler (`vinext/server/fetch-handler`) and adds the
+// Queue consumer for ActivityPub delivery. This file is `main` in wrangler.toml.
 
 import type { MessageBatch } from "@cloudflare/workers-types";
+import handler from "vinext/server/fetch-handler";
 import { postToInboxSigned, validateOutboundUrl } from "../lib/activitypub/federation";
 import type { APDeliveryMessage } from "../lib/activitypub/queue";
 
@@ -74,11 +74,9 @@ async function deliverOne(
   }
 }
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handler = (await import("../.open-next/worker.js")) as any;
-    return handler.default.fetch(request, env, ctx);
+    return handler.fetch(request, env, ctx);
   },
 
   async queue(batch: MessageBatch<APDeliveryMessage>, env: Env): Promise<void> {
@@ -97,3 +95,5 @@ export default {
     }
   },
 };
+
+export default worker;

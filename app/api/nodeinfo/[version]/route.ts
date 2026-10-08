@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json } from "@/lib/cf";
+import { json } from "@/lib/cf";
+import { env } from "cloudflare:workers";
 
 export async function GET(
   _request: NextRequest,
@@ -7,8 +8,6 @@ export async function GET(
 ): Promise<Response> {
   const { version } = await params;
   if (version !== "2.0") return json({ error: "Unsupported version" }, 404);
-
-  const { env } = getCloudflareContext();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const userCount = await (env.DB as any).prepare("SELECT COUNT(*) as count FROM actors WHERE is_local = 1").first() as { count: number } | null;

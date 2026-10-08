@@ -1,8 +1,10 @@
-import { getCloudflareContext } from "@/lib/cf";
-import { getActorByUsername, getShortLinksByActor, getFollowers, getFollowing, getFollow } from "@/lib/db";
+
+import { getActorByUsername, getShortLinksByActor, getFollowers, getFollowing } from "@/lib/db";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import FollowButton from "@/components/FollowButton";
+import { env } from "cloudflare:workers";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +12,6 @@ export async function generateMetadata(
   { params }: { params: Promise<{ username: string }> }
 ): Promise<Metadata> {
   try {
-    const { env } = getCloudflareContext();
     const { username } = await params;
     const domain = new URL(env.INSTANCE_URL || "https://fedishort.com").hostname;
     const actor = await getActorByUsername(env.DB, username, domain);
@@ -27,7 +28,6 @@ export async function generateMetadata(
 export default async function UserPage(
   { params }: { params: Promise<{ username: string }> }
 ) {
-  const { env } = getCloudflareContext();
   const { username } = await params;
   const domain = new URL(env.INSTANCE_URL || "https://fedishort.com").hostname;
   const actor = await getActorByUsername(env.DB, username, domain);
@@ -41,13 +41,13 @@ export default async function UserPage(
     <div className="min-h-screen bg-background text-foreground">
       <nav className="border-b border-border">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm">F</div>
             <span className="font-semibold">FediShort</span>
-          </a>
+          </Link>
           <div className="flex items-center gap-3">
-            <a href="/search" className="text-sm text-muted hover:text-foreground transition-colors">Find people</a>
-            <a href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors">Notifications</a>
+            <Link href="/search" className="text-sm text-muted hover:text-foreground transition-colors">Find people</Link>
+            <Link href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors">Notifications</Link>
           </div>
         </div>
       </nav>
@@ -89,7 +89,7 @@ export default async function UserPage(
                     <p className="text-xs text-muted mt-1 truncate">{link.url}</p>
                     <p className="text-xs text-muted mt-1">{new Date(link.published).toLocaleDateString()} · {link.clicks} clicks</p>
                   </div>
-                  <a href={`/l/${link.slug}`} className="px-4 py-2 rounded-lg bg-secondary text-sm text-muted hover:text-foreground transition-colors shrink-0">Visit</a>
+                  <Link href={`/l/${link.slug}`} className="px-4 py-2 rounded-lg bg-secondary text-sm text-muted hover:text-foreground transition-colors shrink-0">Visit</Link>
                 </div>
               </div>
             ))}

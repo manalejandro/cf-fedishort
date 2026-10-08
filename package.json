@@ -3,23 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "vite dev",
+    "build": "vite build",
     "lint": "eslint",
-    "preview": "opennextjs-cloudflare build && wrangler dev",
-    "deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "preview": "vite build && vite preview",
+    "deploy": "vinext-cloudflare deploy",
     "db:migrate": "wrangler d1 execute cf-fedishort --remote --file=lib/db/schema.sql",
     "db:drop": "wrangler d1 execute cf-fedishort --remote --file=lib/db/drop.sql"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^5.20261003.1",
-    "@opennextjs/cloudflare": "^1.20.8",
     "nanoid": "^5.1.16",
     "next": "^16.3.8",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "wrangler": "^4.147.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-server-dom-webpack": "^19.3.0",
+    "vinext": "^1.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
@@ -29,6 +28,13 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
-  }
+    "typescript": "^5.9.3",
+    "@cloudflare/vite-plugin": "^1.63.0",
+    "@vinext/cloudflare": "^1.0.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-rsc": "^0.5.36",
+    "vite": "^8.3.3",
+    "wrangler": "^4.148.0"
+  },
+  "type": "module"
 }

@@ -1,4 +1,4 @@
-import { getCloudflareContext, unauthorized } from "@/lib/cf";
+
 
 export async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -59,7 +59,6 @@ export async function getSessionActor(
 }
 
 export async function requireActor() {
-  const { env } = getCloudflareContext();
   // This needs to be called from within a request context
   // We'll use cookies for the session
   return null;

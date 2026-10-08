@@ -1,10 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json } from "@/lib/cf";
+import { json } from "@/lib/cf";
 import { searchActors, getActorByUsernameAndDomain } from "@/lib/db";
 import { resolveWebFinger, fetchRemoteObject } from "@/lib/activitypub/federation";
+import { env } from "cloudflare:workers";
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
   if (!q) return json([]);
 

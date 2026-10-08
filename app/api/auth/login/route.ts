@@ -1,10 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json, badRequest } from "@/lib/cf";
+import { json, badRequest } from "@/lib/cf";
 import { getActorByUsername, getActorByEmail } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth";
+import { env } from "cloudflare:workers";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { username, password, turnstileToken } = await request.json() as { username?: string; password?: string; turnstileToken?: string };
 
   if (!username || !password) return badRequest("Missing credentials");

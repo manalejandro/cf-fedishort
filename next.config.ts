@@ -1,15 +1,6 @@
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 import type { NextConfig } from "next";
 
-initOpenNextCloudflareForDev();
-
 const nextConfig: NextConfig = {
-  outputFileTracingExcludes: {
-    "*": [
-      "node_modules/@swc/core-linux-x64-gnu",
-      "node_modules/@swc/core-linux-x64-musl",
-    ],
-  },
   experimental: {
     serverActions: {
       allowedOrigins: ["*"],
@@ -28,8 +19,9 @@ const nextConfig: NextConfig = {
       { key: "Access-Control-Allow-Headers", value: "Content-Type, Authorization, Accept" },
     ];
     return [
-      { source: "/api/:path*", headers: CORS },
-      { source: "/nodeinfo/:path*", headers: CORS },
+      // CORS for routes the proxy does not add CORS to (it covers /api,
+      // /nodeinfo and the AP rewrites). Keeping a single source per path
+      // prevents duplicated Access-Control-Allow-Origin headers.
       { source: "/.well-known/:path*", headers: CORS },
       {
         source: "/:path*",

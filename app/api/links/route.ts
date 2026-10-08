@@ -1,13 +1,13 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json, badRequest, unauthorized } from "@/lib/cf";
+import { json, badRequest, unauthorized } from "@/lib/cf";
 import { getShortLinksByActor, createShortLink, createObject, getFollowerIds, getActorById, createActivity } from "@/lib/db";
-import { generateId, buildLinkNote, buildCreate, followersIRI } from "@/lib/activitypub/utils";
+import { generateId, buildLinkNote, buildCreate } from "@/lib/activitypub/utils";
 import { enqueueDeliveries } from "@/lib/activitypub/queue";
 import { collectFollowerInboxes } from "@/lib/activitypub/federation";
 import { getSessionActor } from "@/lib/auth";
+import { env } from "cloudflare:workers";
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const authHeader = request.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
 
@@ -20,7 +20,6 @@ export async function GET(request: NextRequest): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const authHeader = request.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
 

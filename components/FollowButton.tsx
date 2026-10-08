@@ -11,6 +11,7 @@ export default function FollowButton({ targetActorId, initialFollowing }: { targ
   const isOwnProfile = targetActorId.split("/users/")[1] === currentUsername;
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync the server-provided state when the parent updates the prop
     setFollowing(initialFollowing);
   }, [initialFollowing]);
 

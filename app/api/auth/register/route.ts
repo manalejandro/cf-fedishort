@@ -1,14 +1,14 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json, badRequest } from "@/lib/cf";
+import { json, badRequest } from "@/lib/cf";
 import { getActorByUsername, getActorByEmail, createActor, setEmailVerificationToken } from "@/lib/db";
 import { generateKeyPair } from "@/lib/activitypub/security";
-import { generateId } from "@/lib/activitypub/utils";
+
 import { hashPassword } from "@/lib/auth";
 import { sendVerificationEmail } from "@/lib/email";
 import { detectLocale } from "@/lib/i18n/dict";
+import { env } from "cloudflare:workers";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { username, email, password, turnstileToken } = await request.json() as { username?: string; email?: string; password?: string; turnstileToken?: string };
   const locale = detectLocale(request.headers.get("Accept-Language") ?? "");
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 
 type Locale = "en" | "es";
 
@@ -190,35 +191,6 @@ interface Link {
   published: string;
 }
 
-function useAuth() {
-  const [token, setToken] = useState<string | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
-  const [actorId, setActorId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const t = localStorage.getItem("fs_token");
-    const u = localStorage.getItem("fs_username");
-    const a = localStorage.getItem("fs_actorId");
-    if (t && u) { setToken(t); setUsername(u); setActorId(a); }
-  }, []);
-
-  const login = (t: string, u: string, a: string) => {
-    localStorage.setItem("fs_token", t);
-    localStorage.setItem("fs_username", u);
-    localStorage.setItem("fs_actorId", a);
-    setToken(t); setUsername(u); setActorId(a);
-  };
-
-  const logout = () => {
-    localStorage.removeItem("fs_token");
-    localStorage.removeItem("fs_username");
-    localStorage.removeItem("fs_actorId");
-    setToken(null); setUsername(null); setActorId(null);
-  };
-
-  return { token, username, actorId, login, logout };
-}
-
 function Toggle({ locale, setLocale }: { locale: Locale; setLocale: (l: Locale) => void }) {
   return (
     <button
@@ -293,6 +265,7 @@ function AuthModal({
 
   useEffect(() => {
     if (!showAuth) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the auth form when the dialog closes
       setUsernameInput(""); setEmail(""); setPassword("");
       setConfirmPassword(""); setAuthError(""); setTurnstileToken("");
       setShowForgot(false); setForgotSent(false);
@@ -303,6 +276,7 @@ function AuthModal({
 
   useEffect(() => {
     if (document.querySelector('script[src*="turnstile"]')) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Turnstile may already be loaded by another widget
       setTurnstileReady(true);
       return;
     }
@@ -556,7 +530,6 @@ function AuthModal({
 export default function Home() {
   const [locale, setLocale] = useState<Locale>("en");
   const [ctaKey, setCtaKey] = useState(0);
-  const [showLinks, setShowLinks] = useState(false);
   const [links, setLinks] = useState<Link[]>([]);
   const [newUrl, setNewUrl] = useState("");
   const [newSlug, setNewSlug] = useState("");
@@ -583,6 +556,7 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("verified");
     if (v === "true") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- read the email-verification result from the URL once
       setVerificationStatus({ ok: true });
       const url = new URL(window.location.href);
       url.searchParams.delete("verified");
@@ -678,6 +652,7 @@ export default function Home() {
   const [showRegister, setShowRegister] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- open the auth dialog when the parent bumps the CTA counter
     if (ctaKey && ctaKey > 0) { setShowAuth(true); setShowRegister(true); }
   }, [ctaKey]);
 
@@ -685,23 +660,23 @@ export default function Home() {
     <div className="min-h-screen flex flex-col">
       <nav className="sticky top-0 z-50 backdrop-blur-xl bg-background/80 border-b border-border">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2.5 group">
+          <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm group-hover:scale-105 transition-transform">
               F
             </div>
             <span className="font-semibold text-lg">{d.title}</span>
-          </a>
+          </Link>
 
           <div className="flex items-center gap-3">
             <Toggle locale={locale} setLocale={setLocale} />
             {token ? (
               <>
-                <a href="/search" className="text-sm text-muted hover:text-foreground transition-colors">{d.search}</a>
-                <a href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors relative">
+                <Link href="/search" className="text-sm text-muted hover:text-foreground transition-colors">{d.search}</Link>
+                <Link href="/notifications" className="text-sm text-muted hover:text-foreground transition-colors relative">
                   {d.notifications}
-                </a>
-                <a href={`/users/${username}`} className="text-sm text-muted hover:text-foreground transition-colors">{username}</a>
-                <a href="/links" className="px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors">{d.myLinks}</a>
+                </Link>
+                <Link href={`/users/${username}`} className="text-sm text-muted hover:text-foreground transition-colors">{username}</Link>
+                <Link href="/links" className="px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors">{d.myLinks}</Link>
                 <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="text-sm text-muted hover:text-error transition-colors">{d.logout}</button>
               </>
             ) : (

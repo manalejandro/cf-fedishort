@@ -1,9 +1,9 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json } from "@/lib/cf";
+
 import { verifyEmailByToken } from "@/lib/db";
+import { env } from "cloudflare:workers";
 
 export async function GET(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const token = request.nextUrl.searchParams.get("token");
   if (!token) {
     return Response.redirect(new URL("/?verified=false&reason=missing-token", request.url), 302);

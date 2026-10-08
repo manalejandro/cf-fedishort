@@ -22,7 +22,7 @@ function isAPRequest(request: NextRequest): boolean {
   return AP_TYPES.some((t) => accept.includes(t));
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
   const method = request.method;
 
@@ -78,6 +78,15 @@ export function middleware(request: NextRequest) {
       Object.entries(SECURITY_HEADERS).forEach(([k, v]) => rewriteResponse.headers.set(k, v));
       return rewriteResponse;
     }
+    if (pathname.startsWith("/nodeinfo/")) {
+      // `.well-known/nodeinfo` advertises /nodeinfo/2.0; serve it from the API route.
+      const url = request.nextUrl.clone();
+      url.pathname = "/api" + pathname;
+      const rewriteResponse = NextResponse.rewrite(url);
+      Object.entries(CORS_HEADERS).forEach(([k, v]) => rewriteResponse.headers.set(k, v));
+      Object.entries(SECURITY_HEADERS).forEach(([k, v]) => rewriteResponse.headers.set(k, v));
+      return rewriteResponse;
+    }
     const response = NextResponse.next();
     Object.entries(CORS_HEADERS).forEach(([k, v]) => response.headers.set(k, v));
     Object.entries(SECURITY_HEADERS).forEach(([k, v]) => response.headers.set(k, v));
@@ -89,6 +98,3 @@ export function middleware(request: NextRequest) {
   return response;
 }
 
-export const config = {
-  matcher: ["/users/:path*", "/api/:path*", "/nodeinfo/:path*", "/@:username", "/@:username/:path*", "/inbox"],
-};

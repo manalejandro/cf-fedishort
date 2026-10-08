@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 
 interface EnrichedNotification {
   id: string;
@@ -26,6 +27,7 @@ export default function NotificationsPage() {
   const token = typeof window !== "undefined" ? localStorage.getItem("fs_token") : null;
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loading flag for the initial fetch
     if (!token) { setLoading(false); return; }
     fetch("/api/notifications", {
       headers: { Authorization: `Bearer ${token}` },
@@ -58,11 +60,11 @@ export default function NotificationsPage() {
     <div className="min-h-screen bg-background text-foreground">
       <nav className="border-b border-border">
         <div className="max-w-2xl mx-auto px-4 h-16 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm">F</div>
             <span className="font-semibold">FediShort</span>
-          </a>
-          <a href="/search" className="text-sm text-muted hover:text-foreground transition-colors">Find people</a>
+          </Link>
+          <Link href="/search" className="text-sm text-muted hover:text-foreground transition-colors">Find people</Link>
         </div>
       </nav>
 

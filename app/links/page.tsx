@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 
 interface Link {
   id: string;
@@ -39,11 +40,11 @@ export default function LinksPage() {
     <div className="min-h-screen bg-background text-foreground">
       <nav className="border-b border-border">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-sm">F</div>
             <span className="font-semibold">FediShort</span>
-          </a>
-          <a href="/" className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors">New Link</a>
+          </Link>
+          <Link href="/" className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-hover transition-colors">New Link</Link>
         </div>
       </nav>
 
@@ -54,7 +55,7 @@ export default function LinksPage() {
         ) : links.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-muted mb-4">No links yet.</p>
-            <a href="/" className="px-6 py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-hover transition-colors">Create your first link</a>
+            <Link href="/" className="px-6 py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-hover transition-colors">Create your first link</Link>
           </div>
         ) : (
           <div className="space-y-3">

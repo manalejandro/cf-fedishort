@@ -1,13 +1,13 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, activityJson, notFound } from "@/lib/cf";
-import { getObjectById, getActorById, getShortLinkById } from "@/lib/db";
+import { activityJson, notFound } from "@/lib/cf";
+import { getObjectById, getActorById } from "@/lib/db";
 import { buildLinkNote } from "@/lib/activitypub/utils";
+import { env } from "cloudflare:workers";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { id } = await params;
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;

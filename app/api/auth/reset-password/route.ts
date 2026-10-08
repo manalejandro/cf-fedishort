@@ -1,12 +1,12 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json, badRequest } from "@/lib/cf";
-import { getActorByPasswordResetToken, updateActorPassword, clearPasswordResetToken } from "@/lib/db";
+import { json, badRequest } from "@/lib/cf";
+import { getActorByPasswordResetToken, updateActorPassword } from "@/lib/db";
 import { hashPassword } from "@/lib/auth";
 import { sendPasswordResetConfirmation } from "@/lib/email";
 import { detectLocale } from "@/lib/i18n/dict";
+import { env } from "cloudflare:workers";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { token, password } = await request.json() as { token?: string; password?: string };
   const locale = detectLocale(request.headers.get("Accept-Language") ?? "");
 

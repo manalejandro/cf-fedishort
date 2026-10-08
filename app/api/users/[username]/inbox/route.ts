@@ -1,9 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, json } from "@/lib/cf";
+import { json } from "@/lib/cf";
 import { processInboxActivity } from "@/lib/activitypub/inbox";
 import { extractSigningKeyId } from "@/lib/activitypub/security";
 import { verifyIncomingSignature } from "@/lib/activitypub/signer-key";
 import { getActorByUsername } from "@/lib/db";
+import { env } from "cloudflare:workers";
 
 // 1 MB is far above any legitimate AP activity we accept.
 const MAX_BODY_BYTES = 1_000_000;
@@ -13,7 +14,6 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
 ): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { username } = await params;
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;

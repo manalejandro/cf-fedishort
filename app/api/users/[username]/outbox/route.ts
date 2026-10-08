@@ -1,16 +1,16 @@
 import { type NextRequest } from "next/server";
-import { getCloudflareContext, activityJson, notFound, json } from "@/lib/cf";
-import { getActorByUsername, getShortLinksByActor, getObjectById, getFollowerIds, createActivity, createObject, createShortLink } from "@/lib/db";
-import { buildOrderedCollection, buildOrderedCollectionPage, buildLinkNote, buildCreate, generateId, followersIRI } from "@/lib/activitypub/utils";
+import { activityJson, notFound, json } from "@/lib/cf";
+import { getActorByUsername, getShortLinksByActor, getFollowerIds, createActivity, createObject, createShortLink } from "@/lib/db";
+import { buildOrderedCollection, buildOrderedCollectionPage, buildLinkNote, buildCreate, generateId } from "@/lib/activitypub/utils";
 import { enqueueDeliveries } from "@/lib/activitypub/queue";
 import { collectFollowerInboxes } from "@/lib/activitypub/federation";
 import { getActorById } from "@/lib/db";
+import { env } from "cloudflare:workers";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
 ): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { username } = await params;
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
@@ -42,7 +42,6 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
 ): Promise<Response> {
-  const { env } = getCloudflareContext();
   const { username } = await params;
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;

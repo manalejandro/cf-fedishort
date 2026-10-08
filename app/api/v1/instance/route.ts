@@ -1,12 +1,10 @@
-import { type NextRequest } from "next/server";
-import { getCloudflareContext, json } from "@/lib/cf";
+import { json } from "@/lib/cf";
+import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: NextRequest): Promise<Response> {
-  const { env } = getCloudflareContext();
-
-  const userCount = await (env.DB as any).prepare("SELECT COUNT(*) as count FROM actors WHERE is_local = 1").first() as { count: number } | null;
+export async function GET(): Promise<Response> {
+  const userCount = await env.DB.prepare("SELECT COUNT(*) as count FROM actors WHERE is_local = 1").first() as { count: number } | null;
 
   return json({
     uri: new URL(env.INSTANCE_URL || "https://fedishort.com").hostname,
