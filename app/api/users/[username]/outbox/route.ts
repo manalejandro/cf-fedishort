@@ -29,13 +29,15 @@ export async function GET(
     cc: [`${baseUrl}/users/${username}/followers`],
   }));
 
+  const collectionId = `${baseUrl}/users/${username}/outbox`;
   const page = request.nextUrl.searchParams.get("page");
   if (page === "true") {
-    const collectionId = `${baseUrl}/users/${username}/outbox`;
     return activityJson(buildOrderedCollectionPage(collectionId, items, undefined, undefined));
   }
 
-  return activityJson(buildOrderedCollection(`${baseUrl}/users/${username}/outbox`, items.length));
+  // Mastodon's outbox carries `first` and `last` (`?page=true` and
+  // `?page=true&min_id=0`).
+  return activityJson(buildOrderedCollection(collectionId, items.length, `${collectionId}?page=true&min_id=0`));
 }
 
 export async function POST(

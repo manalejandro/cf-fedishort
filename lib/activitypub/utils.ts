@@ -65,6 +65,9 @@ export function buildActor(
     id,
     type: "Person",
     preferredUsername: username,
+    // Mastodon's ActorSerializer advertises the handle as `webfinger`; some
+    // implementations display it without a WebFinger lookup.
+    webfinger: `${username}@${new URL(baseUrl).hostname}`,
     name: options.displayName ?? username,
     summary: options.summary ?? "",
     url: `${baseUrl}/@${username}`,
@@ -111,7 +114,7 @@ export function buildLinkNote(
   const desc = options.description ? `<p>${escapeHtml(options.description)}</p>` : "";
   const content = `${linkPreview}${desc}${linkMeta}`;
 
-  return {
+  const note = {
     "@context": DEFAULT_CONTEXT,
     id: noteId,
     type: "Note",
@@ -129,6 +132,13 @@ export function buildLinkNote(
       },
     ],
   } as APNote;
+  // FEP-044f / Mastodon's NoteSerializer: the quote policy. Without it a
+  // Mastodon 4.4+ receiver resolves `canQuote` to `:denied` and its users
+  // cannot quote the post at all.
+  (note as Record<string, unknown>).interactionPolicy = {
+    canQuote: { automaticApproval: [PUBLIC_ADDRESS] },
+  };
+  return note;
 }
 
 function escapeHtml(s: string): string {
@@ -149,24 +159,26 @@ export function buildCreate(baseUrl: string, actorId: string, note: APNote, id: 
 }
 
 export function buildFollow(baseUrl: string, actorId: string, targetId: string, id: string): APActivity {
+  // Mastodon's FollowSerializer carries only id/type/actor/object (the target
+  // is the delivery recipient, not an audience).
   return {
     "@context": DEFAULT_CONTEXT,
     id: activityIRI(baseUrl, id),
     type: "Follow",
     actor: actorId,
     object: targetId,
-    to: [targetId],
   } as APActivity;
 }
 
 export function buildAccept(baseUrl: string, actorId: string, followActivity: APActivity, id: string): APActivity {
+  // Mastodon's AcceptFollowSerializer: the inlined Follow and nothing else (the
+  // follower is the delivery recipient).
   return {
     "@context": DEFAULT_CONTEXT,
     id: activityIRI(baseUrl, id),
     type: "Accept",
     actor: actorId,
     object: followActivity,
-    to: [typeof followActivity.actor === "string" ? followActivity.actor : followActivity.actor.id],
   } as APActivity;
 }
 
@@ -182,15 +194,19 @@ export function buildDelete(baseUrl: string, actorId: string, objectId: string, 
 }
 
 export function buildUndo(baseUrl: string, actorId: string, activity: APActivity, id: string): APActivity {
-  return {
+  const undo = {
     "@context": DEFAULT_CONTEXT,
     id: activityIRI(baseUrl, id),
     type: "Undo",
     actor: actorId,
     object: activity,
-    to: activity.to ?? [PUBLIC_ADDRESS],
-    cc: activity.cc,
   } as APActivity;
+  // Mirror the retracted activity's addressing: an Undo must never reach a
+  // wider audience than the activity it undoes. A Follow carries no `to`/`cc`,
+  // and the old `?? [PUBLIC_ADDRESS]` made its Undo public.
+  if (activity.to) undo.to = activity.to;
+  if (activity.cc) undo.cc = activity.cc;
+  return undo;
 }
 
 export function buildUpdate(baseUrl: string, actorId: string, note: APNote, id: string): APActivity {
@@ -206,13 +222,16 @@ export function buildUpdate(baseUrl: string, actorId: string, note: APNote, id: 
   } as APActivity;
 }
 
-export function buildOrderedCollection(id: string, totalItems: number): APCollection {
+export function buildOrderedCollection(id: string, totalItems: number, lastUrl?: string): APCollection {
+  // Mastodon's outbox collection carries `first` and `last` links
+  // (`?page=true` and `?page=true&min_id=0`); other collections only `first`.
   return {
     "@context": DEFAULT_CONTEXT,
     id,
     type: "OrderedCollection",
     totalItems,
     first: `${id}?page=true`,
+    ...(lastUrl ? { last: lastUrl } : {}),
   } as APCollection;
 }
 
