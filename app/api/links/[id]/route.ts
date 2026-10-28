@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { json, unauthorized, notFound } from "@/lib/cf";
-import { getShortLinkById, getActorById, getFollowerIds, createActivity, deleteShortLink, deleteObject } from "@/lib/db";
+import { getShortLinkById, getActorById, getFollowerIds, createActivity, deleteShortLink, deleteObject, bumpActorCount } from "@/lib/db";
 import { generateId, buildDelete } from "@/lib/activitypub/utils";
 import { enqueueDeliveries } from "@/lib/activitypub/queue";
 import { collectFollowerInboxes } from "@/lib/activitypub/federation";
@@ -22,7 +22,8 @@ export async function DELETE(
   const link = await getShortLinkById(env.DB, id);
   if (!link) return notFound();
 
-  if (link.actorId !== session.id) return unauthorized();
+  // Authenticated but not the owner: 403, not 401 (the credentials are valid).
+  if (link.actorId !== session.id) return json({ error: "Forbidden" }, 403);
 
   const domain = new URL(_request.url).hostname;
   const baseUrl = `https://${domain}`;
@@ -63,7 +64,7 @@ export async function DELETE(
 
   await deleteShortLink(env.DB, id);
 
-  await env.DB.prepare("UPDATE actors SET links_count = MAX(0, links_count - 1) WHERE id = ?").bind(session.id).run();
+  await bumpActorCount(env.DB, session.id, "links_count", -1);
 
   return json({ success: true });
 }

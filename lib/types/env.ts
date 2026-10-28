@@ -1,11 +1,10 @@
 import type {
   D1Database,
-  KVNamespace,
   Queue,
   Fetcher,
 } from "@cloudflare/workers-types";
 
-export type { D1Database, KVNamespace, Queue, Fetcher };
+export type { D1Database, Queue, Fetcher };
 
 export interface EmailAddress {
   email: string;
@@ -34,7 +33,6 @@ export interface SendEmail {
 
 export interface CloudflareEnv {
   DB: D1Database;
-  KV: KVNamespace;
   DELIVERY_QUEUE: Queue;
   ASSETS: Fetcher;
   INSTANCE_TITLE: string;

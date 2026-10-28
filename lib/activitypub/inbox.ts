@@ -2,20 +2,21 @@
  * Inbox activity processor — handles incoming ActivityPub activities.
  */
 
-import type { D1Database } from "@cloudflare/workers-types";
+import type { D1Database, Queue } from "@cloudflare/workers-types";
 import type { APActivity, APActor } from "@/lib/types";
 import {
   getActorById,
   createFollow,
   updateFollowState,
   deleteFollow,
-  updateActorCounts,
+  bumpActorCount,
   createNotification,
   getFollowByActivityId,
   getFollow,
 } from "@/lib/db";
 import { buildAccept, generateId } from "./utils";
 import { deliverToInbox, fetchRemoteObject } from "./federation";
+import { enqueueDeliveries, type APDeliveryMessage } from "./queue";
 import { cacheRemoteActor, type LocalSigningKey } from "./signer-key";
 
 interface InboxContext {
@@ -28,6 +29,12 @@ interface InboxContext {
    */
   signingActorId?: string | null;
   signingKey?: LocalSigningKey | null;
+  /**
+   * Delivery queue for outbound activities (e.g. the Accept of a Follow).
+   * When present, deliveries are enqueued instead of blocking the inbox
+   * response on a synchronous fetch (which can stall the 202 for seconds).
+   */
+  queue?: Queue<APDeliveryMessage> | null;
 }
 
 export async function processInboxActivity(activity: APActivity, ctx: InboxContext): Promise<void> {
@@ -124,10 +131,8 @@ async function handleFollow(activity: APActivity, ctx: InboxContext): Promise<vo
   const acceptActivity = buildAccept(ctx.baseUrl, ctx.recipient.id, activity, acceptId);
 
   if (!existing) {
-    const actor = await getActorById(ctx.db, targetId);
-    if (actor) {
-      await updateActorCounts(ctx.db, targetId, { followersCount: (actor.followersCount ?? 0) + 1 });
-    }
+    // Atomic +1 (the follow is accepted immediately for inbound Follows).
+    await bumpActorCount(ctx.db, targetId, "followers_count", 1);
   }
 
   if (!existing) {
@@ -141,7 +146,21 @@ async function handleFollow(activity: APActivity, ctx: InboxContext): Promise<vo
 
   const requesterInbox = followerActor.inbox ?? `${followerActor.id.replace(/\/$/, "")}/inbox`;
   if (requesterInbox) {
-    await deliverToInbox(requesterInbox, acceptActivity, `${ctx.recipient.id}#main-key`, ctx.recipient.privateKeyPem);
+    const keyId = `${ctx.recipient.id}#main-key`;
+    if (ctx.queue) {
+      // Enqueue instead of a synchronous deliverToInbox: the inbox route can
+      // answer 202 right away and the queue consumer retries on failure.
+      await enqueueDeliveries(
+        ctx.queue,
+        [requesterInbox],
+        JSON.stringify(acceptActivity),
+        ctx.recipient.id,
+        keyId,
+        ctx.recipient.privateKeyPem
+      );
+    } else {
+      await deliverToInbox(requesterInbox, acceptActivity, keyId, ctx.recipient.privateKeyPem);
+    }
   }
 }
 
@@ -156,14 +175,13 @@ async function handleAccept(activity: APActivity, ctx: InboxContext): Promise<vo
   if (actorId !== row.targetId) return;
 
   await updateFollowState(ctx.db, row.id, "accepted");
+  // Atomic counters: +1 following for the (local) follower, +1 follower for
+  // the followed actor, only on the pending → accepted transition.
   const follower = await getActorById(ctx.db, row.actorId);
   if (follower?.isLocal) {
-    await updateActorCounts(ctx.db, row.actorId, { followingCount: (follower.followingCount ?? 0) + 1 });
+    await bumpActorCount(ctx.db, row.actorId, "following_count", 1);
   }
-  const followed = await getActorById(ctx.db, row.targetId);
-  if (followed) {
-    await updateActorCounts(ctx.db, row.targetId, { followersCount: (followed.followersCount ?? 0) + 1 });
-  }
+  await bumpActorCount(ctx.db, row.targetId, "followers_count", 1);
   if (follower?.isLocal) {
     await createNotification(ctx.db, {
       id: generateId(),
@@ -207,9 +225,10 @@ async function handleUndo(activity: APActivity, ctx: InboxContext): Promise<void
       const follow = await getFollow(ctx.db, actorId, targetId);
       if (!follow) return;
       await deleteFollow(ctx.db, actorId, targetId);
-      const target = await getActorById(ctx.db, targetId);
-      if (target) {
-        await updateActorCounts(ctx.db, targetId, { followersCount: Math.max(0, (target.followersCount ?? 0) - 1) });
+      // Only an accepted follow ever bumped the counters; undoing a pending
+      // or rejected one must not decrement anything.
+      if (follow.state === "accepted") {
+        await bumpActorCount(ctx.db, targetId, "followers_count", -1);
       }
     }
   }
@@ -225,6 +244,15 @@ async function handleDelete(activity: APActivity, ctx: InboxContext): Promise<vo
     .bind(objectId, actorId)
     .first() as { id: string } | null;
   if (obj) {
+    // The short link points at the object (short_links.object_id): remove it
+    // too, otherwise /l/<slug> would keep serving a deleted object's target.
+    const deletedLink = await ctx.db
+      .prepare("DELETE FROM short_links WHERE object_id = ?")
+      .bind(objectId)
+      .run();
+    if ((deletedLink.meta?.changes ?? 0) > 0) {
+      await bumpActorCount(ctx.db, actorId, "links_count", -(deletedLink.meta?.changes ?? 0));
+    }
     await ctx.db.prepare("DELETE FROM objects WHERE id = ?").bind(objectId).run();
   }
 }
@@ -272,7 +300,9 @@ async function ensureActorCached(
       followers: `${actor.id}/followers`,
       following: `${actor.id}/following`,
       publicKey: { id: `${actor.id}#main-key`, owner: actor.id, publicKeyPem: actor.publicKeyPem },
-      endpoints: { sharedInbox: `${new URL(actor.id).origin}/inbox` },
+      // Use the stored shared inbox: fabricating `<origin>/inbox` is wrong for
+      // servers whose shared inbox lives on another path (or another host).
+      ...(actor.sharedInbox ? { endpoints: { sharedInbox: actor.sharedInbox } } : {}),
     } as APActor;
   }
   try {

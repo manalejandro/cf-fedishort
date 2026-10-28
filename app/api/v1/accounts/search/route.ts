@@ -1,14 +1,25 @@
 import { type NextRequest } from "next/server";
 import { json } from "@/lib/cf";
-import { searchActors, getActorByUsernameAndDomain } from "@/lib/db";
+import { searchActors, getActorByUsernameAndDomain, getActorById } from "@/lib/db";
 import { resolveWebFinger, fetchRemoteObject } from "@/lib/activitypub/federation";
+import { cacheRemoteActor, isLocalActorId } from "@/lib/activitypub/signer-key";
+import { consumeRateLimit, clientIp, tooManyRequests } from "@/lib/ratelimit";
 import { env } from "cloudflare:workers";
+import type { APActor } from "@/lib/types";
 
-export async function GET(request: NextRequest): Promise<Response> {
-  const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
-  if (!q) return json([]);
-
-  const mapActor = (a: { id: string; username: string; domain: string; displayName: string | null; avatarUrl: string | null; summary: string | null; followersCount: number; followingCount: number; linksCount: number; isLocal: boolean }) => ({
+function publicActor(a: {
+  id: string;
+  username: string;
+  domain: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  summary: string | null;
+  followersCount: number;
+  followingCount: number;
+  linksCount: number;
+  isLocal: boolean;
+}) {
+  return {
     id: a.id,
     username: a.username,
     domain: a.domain,
@@ -19,42 +30,50 @@ export async function GET(request: NextRequest): Promise<Response> {
     followingCount: a.followingCount,
     linksCount: a.linksCount,
     isLocal: a.isLocal,
-  });
+  };
+}
 
-  // If query looks like user@domain, try WebFinger resolution
-  const fediMatch = q.match(/^@?([a-z0-9_\.-]+)@([a-z0-9_\.-]+\.[a-z]+)$/i);
-  if (fediMatch) {
-    const [, username, domain] = fediMatch;
+export async function GET(request: NextRequest): Promise<Response> {
+  const q = (request.nextUrl.searchParams.get("q") ?? "").trim();
+  const rawLimit = parseInt(request.nextUrl.searchParams.get("limit") ?? "20", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 40) : 20;
+  const resolve = request.nextUrl.searchParams.get("resolve") !== "false";
 
-    // Check if already cached
-    let actor = await getActorByUsernameAndDomain(env.DB, username, domain);
-    if (!actor) {
-      // Resolve via WebFinger
-      const actorUrl = await resolveWebFinger(`${username}@${domain}`);
-      if (actorUrl) {
-        // Check if already cached by ID
-        const byId = await env.DB.prepare("SELECT id FROM actors WHERE id = ?").bind(actorUrl).first() as { id: string } | null;
-        if (!byId) {
-          // Fetch and cache the remote actor
-          const fetched = await fetchRemoteObject(actorUrl) as { id: string; preferredUsername: string; inbox?: string; endpoints?: { sharedInbox?: string }; name?: string; summary?: string; icon?: { url?: string }; image?: { url?: string }; publicKey?: { publicKeyPem: string } } | null;
-          if (fetched?.publicKey?.publicKeyPem) {
-            const fetchedDomain = new URL(fetched.id).hostname;
-            await env.DB
-              .prepare("INSERT OR REPLACE INTO actors (id, username, domain, display_name, summary, avatar_url, header_url, public_key_pem, inbox, shared_inbox, is_local, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))")
-              .bind(fetched.id, fetched.preferredUsername, fetchedDomain, fetched.name ?? null, fetched.summary ?? null, fetched.icon?.url ?? null, fetched.image?.url ?? null, fetched.publicKey.publicKeyPem, fetched.inbox ?? null, fetched.endpoints?.sharedInbox ?? null)
-              .run();
+  if (!q) return json([]);
+
+  // If the query looks like user@domain, try WebFinger resolution.
+  if (q.includes("@") && q.split("@").length >= 2) {
+    const normalized = q.startsWith("@") ? q.slice(1) : q;
+    const [username, domain] = normalized.split("@");
+    if (username && domain) {
+      let actor = await getActorByUsernameAndDomain(env.DB, username, domain);
+      if (!actor && resolve) {
+        // Remote resolves trigger outbound fetches + DB writes from an
+        // unauthenticated endpoint: cap them per IP.
+        const rl = await consumeRateLimit(env.DB, `search:${clientIp(request)}`, 30, 3600);
+        if (!rl.ok) return tooManyRequests(rl.retryAfter);
+
+        const href = await resolveWebFinger(normalized);
+        if (href) {
+          const fetched = (await fetchRemoteObject(href)) as APActor | null;
+          // Origin validation: the document must BE the resource we asked for
+          // and must not claim to live on this instance (that would let a
+          // malicious server overwrite local accounts).
+          if (
+            fetched?.publicKey?.publicKeyPem &&
+            fetched.id === href &&
+            !isLocalActorId(fetched.id)
+          ) {
+            await cacheRemoteActor(env.DB, fetched);
+            actor = await getActorById(env.DB, href);
           }
         }
-        actor = await getActorByUsernameAndDomain(env.DB, username, domain);
       }
-    }
-
-    if (actor) {
-      return json([mapActor(actor)]);
+      if (actor) return json([publicActor(actor)]);
     }
   }
 
-  // Fallback: search local + cached remote actors
-  const results = await searchActors(env.DB, q);
-  return json(results.map(mapActor));
+  // Fallback: search local + cached remote actors.
+  const results = await searchActors(env.DB, q, limit);
+  return json(results.map(publicActor));
 }

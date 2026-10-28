@@ -5,15 +5,36 @@ import { useState, useEffect } from "react";
 export default function FollowButton({ targetActorId, initialFollowing }: { targetActorId: string; initialFollowing: boolean }) {
   const [following, setFollowing] = useState(initialFollowing);
   const [loading, setLoading] = useState(false);
+  // localStorage is only read after mount: reading it during render makes the
+  // client's first render diverge from the server HTML (hydration mismatch).
+  const [token, setToken] = useState<string | null>(null);
+  const [currentUsername, setCurrentUsername] = useState<string | null>(null);
 
-  const token = typeof window !== "undefined" ? localStorage.getItem("fs_token") : null;
-  const currentUsername = typeof window !== "undefined" ? localStorage.getItem("fs_username") : null;
-  const isOwnProfile = targetActorId.split("/users/")[1] === currentUsername;
+  useEffect(() => {
+    const t = localStorage.getItem("fs_token");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only; defer the read until after hydration
+    setToken(t);
+    setCurrentUsername(localStorage.getItem("fs_username"));
+    if (!t) return;
+    // Ask the API for the real follow state (the server page cannot know it).
+    let cancelled = false;
+    fetch(`/api/follow?targetId=${encodeURIComponent(targetActorId)}`, {
+      headers: { Authorization: `Bearer ${t}` },
+    })
+      .then((r) => r.json())
+      .then((data: unknown) => {
+        if (!cancelled) setFollowing(Boolean((data as { following?: boolean }).following));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [targetActorId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync the server-provided state when the parent updates the prop
     setFollowing(initialFollowing);
   }, [initialFollowing]);
+
+  const isOwnProfile = currentUsername !== null && targetActorId.split("/users/")[1] === currentUsername;
 
   const handleClick = async () => {
     if (!token || loading) return;
@@ -25,7 +46,12 @@ export default function FollowButton({ targetActorId, initialFollowing }: { targ
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ targetId: targetActorId }),
       });
-      if (res.ok) setFollowing(!following);
+      if (res.ok) {
+        // The API answers with the authoritative state (a remote follow stays
+        // "pending" → following:false even though the request succeeded).
+        const data = (await res.json().catch(() => null)) as { following?: boolean } | null;
+        setFollowing(typeof data?.following === "boolean" ? data.following : !following);
+      }
     } catch { /* ignore */ }
     finally { setLoading(false); }
   };

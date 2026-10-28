@@ -44,3 +44,7 @@ next-env.d.ts
 /dist/
 /.cloudflare/
 /.vinext/
+
+# wrangler local state & backups
+.wrangler/
+wrangler.toml.orig*

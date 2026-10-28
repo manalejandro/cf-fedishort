@@ -33,7 +33,8 @@ export default function NotificationsPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
-      .then((data: unknown) => setNotifs(data as EnrichedNotification[]))
+      // Guard against error payloads ({error:...}): only arrays reach the state.
+      .then((data: unknown) => setNotifs(Array.isArray(data) ? (data as EnrichedNotification[]) : []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [token]);

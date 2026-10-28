@@ -648,6 +648,22 @@ export default function Home() {
   const token = typeof window !== "undefined" ? localStorage.getItem("fs_token") : null;
   const username = typeof window !== "undefined" ? localStorage.getItem("fs_username") : null;
 
+  const handleLogout = async () => {
+    // Best-effort server-side revocation of the session; the local state is
+    // cleared either way, even if the request fails.
+    try {
+      const t = localStorage.getItem("fs_token");
+      if (t) {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${t}` },
+        });
+      }
+    } catch { /* ignore */ }
+    localStorage.clear();
+    window.location.reload();
+  };
+
   const [showAuth, setShowAuth] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
 
@@ -677,7 +693,7 @@ export default function Home() {
                 </Link>
                 <Link href={`/users/${username}`} className="text-sm text-muted hover:text-foreground transition-colors">{username}</Link>
                 <Link href="/links" className="px-4 py-2 rounded-lg bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors">{d.myLinks}</Link>
-                <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="text-sm text-muted hover:text-error transition-colors">{d.logout}</button>
+                <button onClick={handleLogout} className="text-sm text-muted hover:text-error transition-colors">{d.logout}</button>
               </>
             ) : (
               <>

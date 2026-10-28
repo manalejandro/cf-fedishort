@@ -18,13 +18,21 @@ export async function POST(
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
 
+  // Cheap early-out on the declared size before buffering anything.
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return json({ error: "Payload too large" }, 413);
+  }
+
   let rawBody: string;
   try {
     rawBody = await request.text();
   } catch {
     return json({ error: "Could not read request body" }, 400);
   }
-  if (rawBody.length > MAX_BODY_BYTES) {
+  // Measure BYTES, not characters: multi-byte UTF-8 payloads are longer than
+  // rawBody.length suggests.
+  if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
     return json({ error: "Payload too large" }, 413);
   }
 
@@ -75,10 +83,12 @@ export async function POST(
         baseUrl,
         signingActorId,
         signingKey,
+        queue: env.DELIVERY_QUEUE,
         recipient: { id: recipient.id, username: recipient.username, privateKeyPem: recipient.privateKeyPem },
       });
-    } catch {
+    } catch (err) {
       // Still return 202 so the remote server does not keep retrying.
+      console.error(`[inbox] processInboxActivity failed for user ${username}:`, err);
     }
   }
 

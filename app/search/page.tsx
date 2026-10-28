@@ -50,7 +50,12 @@ export default function SearchPage() {
         body: JSON.stringify({ targetId }),
       });
       if (res.ok) {
-        setFollowState((prev) => ({ ...prev, [targetId]: "following" }));
+        // The API answers with the authoritative state: a remote follow stays
+        // pending (following:false) even though the request succeeded.
+        const data = (await res.json().catch(() => null)) as { following?: boolean } | null;
+        if (data?.following !== false) {
+          setFollowState((prev) => ({ ...prev, [targetId]: "following" }));
+        }
       }
     } catch { /* ignore */ }
     finally {

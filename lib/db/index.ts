@@ -11,6 +11,17 @@ import type {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
 
+/**
+ * Normalize SQLite `datetime('now')` values ("YYYY-MM-DD HH:MM:SS", UTC) to
+ * ISO-8601 so `new Date(...)` in clients/APIs never parses them as local time.
+ * Values already in ISO format are returned untouched.
+ */
+function toIso(dateStr: string | null | undefined): string {
+  if (!dateStr) return dateStr ?? "";
+  if (dateStr.includes("T")) return dateStr;
+  return dateStr.replace(" ", "T") + "Z";
+}
+
 function rowToActor(r: Row): LocalActor {
   return {
     id: r.id,
@@ -29,8 +40,8 @@ function rowToActor(r: Row): LocalActor {
     email: r.email ?? null,
     passwordHash: r.password_hash ?? null,
     emailVerified: Boolean(r.email_verified),
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt: toIso(r.created_at),
+    updatedAt: toIso(r.updated_at),
     inbox: r.inbox ?? null,
     sharedInbox: r.shared_inbox ?? null,
   };
@@ -113,9 +124,12 @@ export async function getActorByEmail(db: D1Database, email: string): Promise<Lo
 }
 
 export async function searchActors(db: D1Database, query: string, limit = 20): Promise<LocalActor[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 40) : 20;
+  // Escape LIKE wildcards so user input cannot act as a wildcard pattern.
+  const escaped = query.toLowerCase().replace(/[\\%_]/g, (m) => `\\${m}`);
   const { results } = await db
-    .prepare("SELECT * FROM actors WHERE (LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?) ORDER BY is_local DESC, followers_count DESC LIMIT ?")
-    .bind(`%${query.toLowerCase()}%`, `%${query.toLowerCase()}%`, limit)
+    .prepare("SELECT * FROM actors WHERE (LOWER(username) LIKE ? ESCAPE '\\' OR LOWER(display_name) LIKE ? ESCAPE '\\') ORDER BY is_local DESC, followers_count DESC LIMIT ?")
+    .bind(`%${escaped}%`, `%${escaped}%`, safeLimit)
     .all<Row>();
   return results.map(rowToActor);
 }
@@ -198,6 +212,22 @@ export async function updateActorCounts(
     .run();
 }
 
+/**
+ * Atomically bump a counter (race-free, clamped at 0). Prefer this over
+ * read-modify-write with `updateActorCounts` for +/- 1 transitions.
+ */
+export async function bumpActorCount(
+  db: D1Database,
+  id: string,
+  field: "followers_count" | "following_count" | "links_count",
+  delta: number
+): Promise<void> {
+  await db
+    .prepare(`UPDATE actors SET ${field} = MAX(0, ${field} + ?), updated_at = datetime('now') WHERE id = ?`)
+    .bind(delta, id)
+    .run();
+}
+
 export async function setEmailVerificationToken(
   db: D1Database,
   actorId: string,
@@ -211,7 +241,7 @@ export async function setEmailVerificationToken(
 
 export async function verifyEmailByToken(db: D1Database, token: string): Promise<string | null> {
   const row = await db
-    .prepare("SELECT id FROM actors WHERE email_verification_token = ? AND email_verified = 0")
+    .prepare("SELECT id FROM actors WHERE email_verification_token = ? AND email_verified = 0 AND email_verification_sent_at > datetime('now', '-1 day')")
     .bind(token)
     .first() as { id: string } | null;
   if (!row) return null;
@@ -267,6 +297,24 @@ export async function updateActorPassword(
 ): Promise<void> {
   await db
     .prepare("UPDATE actors SET password_hash = ?, password_reset_token = NULL, password_reset_expires_at = NULL, updated_at = datetime('now') WHERE id = ?")
+    .bind(passwordHash, actorId)
+    .run();
+  // A password reset must revoke every existing session (compromise response).
+  await db.prepare("DELETE FROM sessions WHERE actor_id = ?").bind(actorId).run();
+}
+
+/**
+ * Replace only the password hash, leaving sessions and reset tokens untouched.
+ * Used for the transparent legacy-hash upgrade on login (the user just
+ * authenticated successfully, so their sessions must survive).
+ */
+export async function updatePasswordHashOnly(
+  db: D1Database,
+  actorId: string,
+  passwordHash: string
+): Promise<void> {
+  await db
+    .prepare("UPDATE actors SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
     .bind(passwordHash, actorId)
     .run();
 }
@@ -549,8 +597,12 @@ export async function createNotification(
     .run();
 }
 
-export async function markNotificationRead(db: D1Database, id: string): Promise<void> {
-  await db.prepare("UPDATE notifications SET is_read = 1 WHERE id = ?").bind(id).run();
+export async function markNotificationRead(db: D1Database, id: string, targetAccountId: string): Promise<void> {
+  // Scoped to the owner: prevents marking other users' notifications as read.
+  await db
+    .prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND target_account_id = ?")
+    .bind(id, targetAccountId)
+    .run();
 }
 
 export async function getUnreadNotificationCount(db: D1Database, targetAccountId: string): Promise<number> {

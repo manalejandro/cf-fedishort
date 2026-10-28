@@ -1,12 +1,13 @@
 import { type NextRequest } from "next/server";
-import { activityJson, notFound, json } from "@/lib/cf";
-import { getActorByUsername, getShortLinksByActor, getFollowerIds, createActivity, createObject, createShortLink } from "@/lib/db";
-import { buildOrderedCollection, buildOrderedCollectionPage, buildLinkNote, buildCreate, generateId } from "@/lib/activitypub/utils";
-import { enqueueDeliveries } from "@/lib/activitypub/queue";
-import { collectFollowerInboxes } from "@/lib/activitypub/federation";
-import { getActorById } from "@/lib/db";
+import { activityJson, notFound } from "@/lib/cf";
+import { getActorByUsername, getShortLinksByActor } from "@/lib/db";
+import { buildOrderedCollection, buildOrderedCollectionPage } from "@/lib/activitypub/utils";
 import { env } from "cloudflare:workers";
 
+// NOTE: there is deliberately no POST handler here. Publishing used to be
+// allowed without authentication, which let anyone create and federate links
+// signed with the local user's private key. The authenticated API for
+// creating links is POST /api/links; Next.js answers 405 to POST here.
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
@@ -38,113 +39,4 @@ export async function GET(
   // Mastodon's outbox carries `first` and `last` (`?page=true` and
   // `?page=true&min_id=0`).
   return activityJson(buildOrderedCollection(collectionId, items.length, `${collectionId}?page=true&min_id=0`));
-}
-
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ username: string }> }
-): Promise<Response> {
-  const { username } = await params;
-  const domain = new URL(request.url).hostname;
-  const baseUrl = `https://${domain}`;
-
-  const actor = await getActorByUsername(env.DB, username, domain);
-  if (!actor || !actor.isLocal) return notFound("Actor not found");
-
-  const body = await request.json() as Record<string, unknown>;
-
-  if (body.type === "Create" && typeof body.object === "object" && body.object !== null) {
-    const obj = body.object as Record<string, unknown>;
-    if (obj.type === "Note") {
-      const slug = (obj as Record<string, unknown>).slug as string ?? generateId().slice(0, 8);
-      const targetUrl = obj.content as string ?? "";
-      const title = obj.name as string ?? null;
-      const description = obj.summary as string ?? null;
-      const noteId = generateId();
-      const published = new Date().toISOString();
-
-      const note = buildLinkNote(baseUrl, noteId, {
-        actorUsername: username,
-        url: targetUrl,
-        title: title ?? undefined,
-        description: description ?? undefined,
-        slug,
-        published,
-      });
-
-      const objectId = `${baseUrl}/objects/${noteId}`;
-      const linkId = generateId();
-
-      await createObject(env.DB, {
-        id: objectId,
-        type: "Note",
-        actorId: actor.id,
-        content: note.content,
-        visibility: "public",
-        url: `${baseUrl}/l/${slug}`,
-        published,
-        local: true,
-        raw: JSON.stringify(note),
-      });
-
-      await createShortLink(env.DB, {
-        id: linkId,
-        slug,
-        actorId: actor.id,
-        url: targetUrl,
-        title,
-        description,
-        objectId,
-        published,
-      });
-
-      const create = buildCreate(baseUrl, actor.id, note, generateId());
-
-      await createActivity(env.DB, {
-        id: create.id,
-        type: "Create",
-        actorId: actor.id,
-        objectId,
-        toList: JSON.stringify(note.to),
-        ccList: JSON.stringify(note.cc),
-        raw: JSON.stringify(create),
-        isLocal: true,
-      });
-
-      if (actor.privateKeyPem) {
-        const followerIds = await getFollowerIds(env.DB, actor.id);
-        if (followerIds.length > 0) {
-          const fetchActorFn = async (id: string) => {
-            const a = await getActorById(env.DB, id);
-            return a;
-          };
-          const inboxes = await collectFollowerInboxes(followerIds, fetchActorFn);
-          if (inboxes.length > 0) {
-            await enqueueDeliveries(
-              env.DELIVERY_QUEUE,
-              inboxes,
-              JSON.stringify(create),
-              actor.id,
-              `${actor.id}#main-key`,
-              actor.privateKeyPem
-            );
-          }
-        }
-      }
-
-      await env.DB
-        .prepare("UPDATE actors SET links_count = links_count + 1 WHERE id = ?")
-        .bind(actor.id)
-        .run();
-
-      return json({
-        id: objectId,
-        type: "Note",
-        url: `${baseUrl}/l/${slug}`,
-        slug,
-      }, 201);
-    }
-  }
-
-  return json({ error: "Activity type not supported" }, 422);
 }

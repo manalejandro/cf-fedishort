@@ -4,6 +4,13 @@ import { getObjectById, getActorById } from "@/lib/db";
 import { buildLinkNote } from "@/lib/activitypub/utils";
 import { env } from "cloudflare:workers";
 
+interface ObjectShortLink {
+  slug: string;
+  url: string;
+  title: string | null;
+  description: string | null;
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -11,25 +18,26 @@ export async function GET(
   const { id } = await params;
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
+  const objectId = `${baseUrl}/objects/${id}`;
+
+  // The short link associated with this object carries the human-facing slug
+  // (`/l/<slug>`); the object uuid is NOT a slug and would 404.
+  const link = await env.DB
+    .prepare("SELECT slug, url, title, description FROM short_links WHERE object_id = ?")
+    .bind(objectId)
+    .first<ObjectShortLink>();
 
   const accept = request.headers.get("accept") ?? "";
   if (!accept.includes("json")) {
-    return Response.redirect(`${baseUrl}/l/${id}`, 302);
+    if (!link) return notFound("Object not found");
+    return Response.redirect(`${baseUrl}/l/${link.slug}`, 302);
   }
 
-  const objectId = `${baseUrl}/objects/${id}`;
   const obj = await getObjectById(env.DB, objectId);
   if (!obj || !obj.local) return notFound("Object not found");
 
   const author = await getActorById(env.DB, obj.actorId);
   if (!author || !author.isLocal) return notFound("Object not found");
-
-  // Find the short link associated with this object
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const link = await (env.DB as any)
-    .prepare("SELECT * FROM short_links WHERE object_id = ?")
-    .bind(objectId)
-    .first() as { slug: string; url: string; title: string | null; description: string | null } | null;
 
   const slug = link?.slug ?? id;
   const targetUrl = link?.url ?? obj.url;

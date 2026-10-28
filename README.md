@@ -9,7 +9,7 @@ Shorten URLs and share them across the fediverse. Each short link is an Activity
 - **ActivityPub Federation** — Every short link is a federated Note. Followers see your links in their home feed.
 - **URL Shortening** — Create short, memorable links with custom slugs.
 - **Bilingual** — English and Spanish interface.
-- **Cloudflare Stack** — Built with Next.js, D1 database, Workers Queues, and deployed via OpenNext.
+- **Cloudflare Stack** — Built with Next.js, D1 database, Workers Queues, and deployed via vinext.
 - **Open Source** — Full source available under MIT.
 
 ## Tech Stack
@@ -19,7 +19,7 @@ Shorten URLs and share them across the fediverse. Each short link is an Activity
 | Framework | Next.js 16                          |
 | Database  | Cloudflare D1 (SQLite)              |
 | Queue     | Cloudflare Workers Queues           |
-| Runtime   | Cloudflare Workers (via OpenNext)   |
+| Runtime   | Cloudflare Workers (via vinext)     |
 | Styles    | Tailwind CSS v4                     |
 | Auth      | PBKDF2 password hashing + sessions  |
 | Federation| ActivityPub (WebFinger, HTTP Signatures) |
@@ -74,7 +74,7 @@ wrangler queue create cf-fedishort-delivery
 Set secrets:
 
 ```bash
-wrangler secret put TURNSTILE_SECRET
+wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
 ### Development
@@ -89,7 +89,7 @@ npm run dev
 npm run deploy
 ```
 
-This runs `opennextjs-cloudflare build && wrangler deploy`.
+This runs `vinext-cloudflare deploy`.
 
 ## Project Structure
 
@@ -111,12 +111,12 @@ cf-fedishort/
 │   ├── activitypub/        # ActivityPub core (security, utils, federation, inbox, vocab, queue)
 │   ├── db/                 # D1 database schema & access layer
 │   ├── i18n/               # Internationalization dictionary
+│   ├── ratelimit.ts        # D1-backed rate limiter for abuse-prone endpoints
 │   └── types/              # TypeScript types
 ├── src/
 │   └── worker.ts           # Cloudflare Worker entry point + Queue consumer
-├── middleware.ts            # Next.js middleware for CORS & URL rewrites
+├── proxy.ts                 # Next.js proxy (middleware) for CORS & URL rewrites
 ├── next.config.ts           # Next.js configuration
-├── open-next.config.ts      # OpenNext Cloudflare adapter config
 └── wrangler.toml            # Cloudflare Workers configuration
 ```
 
@@ -143,6 +143,7 @@ cf-fedishort/
 |---|---|
 | `POST /api/auth/register` | Register a new user |
 | `POST /api/auth/login` | Login |
+| `POST /api/auth/logout` | Logout (revokes the bearer session) |
 | `GET /api/links` | Get user's links (auth required) |
 | `POST /api/links` | Create a short link (auth required) |
 | `GET /l/:slug` | Redirect to original URL |

@@ -17,11 +17,13 @@ const REQUEST_TIMEOUT_MS = 10_000;
  * fetches (authorized-fetch instances answer unsigned requests with 401
  * "Request not signed") and relay subscription Follows. Prefer the oldest
  * local actor, cached for the isolate's lifetime (keys change rarely).
+ * Only a valid signer is cached: a failed/empty lookup stays retryable so a
+ * fresh instance recovers as soon as its first local actor exists.
  */
-let fetchSigner: { id: string; privateKeyPem: string } | null | undefined;
+let fetchSigner: { id: string; privateKeyPem: string } | null = null;
 
 export async function getInstanceSigner(): Promise<{ id: string; privateKeyPem: string } | null> {
-  if (fetchSigner !== undefined) return fetchSigner;
+  if (fetchSigner) return fetchSigner;
   try {
     const row = await env.DB
       .prepare(
@@ -30,9 +32,11 @@ export async function getInstanceSigner(): Promise<{ id: string; privateKeyPem: 
          ORDER BY created_at ASC LIMIT 1`
       )
       .first<{ id: string; private_key_pem: string }>();
-    fetchSigner = row?.private_key_pem ? { id: row.id, privateKeyPem: row.private_key_pem } : null;
+    if (row?.private_key_pem) {
+      fetchSigner = { id: row.id, privateKeyPem: row.private_key_pem };
+    }
   } catch {
-    fetchSigner = null;
+    // Not cached: the next call retries the lookup.
   }
   return fetchSigner;
 }
@@ -274,6 +278,44 @@ export async function deliverToInboxes(
 // Fetch a remote ActivityPub object
 // ─────────────────────────────────────────
 
+/** Hard cap for remote documents: no legitimate actor/object needs more. */
+const MAX_REMOTE_BODY_BYTES = 2_000_000;
+
+/**
+ * Read a response body as text, aborting as soon as it exceeds `maxBytes`.
+ * Streaming chunk-by-chunk (instead of `res.text()` + length check) keeps a
+ * malicious multi-hundred-MB body from ever landing fully in memory.
+ */
+async function readBodyLimited(res: Response, maxBytes: number): Promise<string | null> {
+  // Cheap early-out when the server announces an oversized body.
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await discardBody(res);
+    return null;
+  }
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 export async function fetchRemoteObject(
   url: string,
   senderKeyId?: string,
@@ -319,11 +361,12 @@ export async function fetchRemoteObject(
     }
 
     // The timeout signal stays armed while the body is read, so a slow body
-    // can't hang the request past REQUEST_TIMEOUT_MS. Read as text first and
-    // cap the size: res.json() on a malicious multi-hundred-MB body would
-    // exhaust the Worker's memory before any check could run.
-    const text = await res.text();
-    if (!text || text.length > 2_000_000) return null;
+    // can't hang the request past REQUEST_TIMEOUT_MS. Stream the body chunk by
+    // chunk and abort past the size cap: res.text() (or res.json()) on a
+    // malicious multi-hundred-MB body would exhaust the Worker's memory before
+    // any check could run.
+    const text = await readBodyLimited(res, MAX_REMOTE_BODY_BYTES);
+    if (!text) return null;
     try {
       return JSON.parse(text) as APActor | APObject | APActivity;
     } catch {

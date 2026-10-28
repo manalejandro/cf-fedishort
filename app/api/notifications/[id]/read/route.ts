@@ -15,6 +15,8 @@ export async function POST(
   if (!session) return unauthorized();
 
   const { id } = await params;
-  await markNotificationRead(env.DB, id);
+  // Scoped to the session owner: without target_account_id this is an IDOR
+  // (any authenticated user could mark anyone's notifications as read).
+  await markNotificationRead(env.DB, id, session.id);
   return json({ success: true });
 }

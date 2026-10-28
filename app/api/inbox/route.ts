@@ -3,7 +3,7 @@ import { json } from "@/lib/cf";
 import { processInboxActivity } from "@/lib/activitypub/inbox";
 import { extractSigningKeyId } from "@/lib/activitypub/security";
 import { purgeGoneSignerData, verifyIncomingSignature } from "@/lib/activitypub/signer-key";
-import { getActorById, getActorByUsername } from "@/lib/db";
+import { getActorById } from "@/lib/db";
 import { env } from "cloudflare:workers";
 
 // 1 MB is far above any legitimate AP activity we accept.
@@ -14,6 +14,12 @@ export async function POST(request: NextRequest): Promise<Response> {
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
 
+  // Cheap early-out on the declared size before buffering anything.
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return json({ error: "Payload too large" }, 413);
+  }
+
   // Read body as text so we can parse JSON ourselves (needed for digest
   // verification without a second read).
   let rawBody: string;
@@ -22,7 +28,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   } catch {
     return json({ error: "Could not read request body" }, 400);
   }
-  if (rawBody.length > MAX_BODY_BYTES) {
+  // Measure BYTES, not characters: multi-byte UTF-8 payloads are longer than
+  // rawBody.length suggests.
+  if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
     return json({ error: "Payload too large" }, 413);
   }
 
@@ -48,12 +56,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   let signingKey: { id: string; privateKeyPem: string } | undefined;
   try {
     const localRow = await env.DB
-      .prepare("SELECT id, private_key_pem FROM actors WHERE is_local = 1 AND private_key_pem IS NOT NULL LIMIT 1")
+      .prepare("SELECT id, private_key_pem FROM actors WHERE is_local = 1 AND private_key_pem IS NOT NULL ORDER BY created_at ASC LIMIT 1")
       .first<{ id: string; private_key_pem: string }>();
     if (localRow?.private_key_pem) {
       signingKey = { id: localRow.id, privateKeyPem: localRow.private_key_pem };
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    console.error("[inbox] Local signing key lookup failed:", err);
+  }
 
   const check = await verifyIncomingSignature(env.DB, {
     method: "POST",
@@ -99,18 +109,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       : json({ error: "Invalid HTTP signature" }, 401);
   }
 
+  // The shared inbox has no recipient in the URL: resolve it from the
+  // activity's object (e.g. a Follow's object is the local actor). Per-user
+  // deliveries go through /api/users/[username]/inbox instead.
   let recipient: { id: string; username: string; privateKeyPem: string } | null = null;
-
-  const inboxUsername = request.nextUrl.pathname.match(/^\/api\/users\/([^/]+)\/inbox$/)?.[1];
-  if (inboxUsername) {
-    const r = await getActorByUsername(env.DB, inboxUsername, domain);
+  const targetId = typeof body.object === "string" ? body.object : (body.object as { id?: string })?.id;
+  if (targetId) {
+    const r = await getActorById(env.DB, targetId);
     if (r?.privateKeyPem) recipient = { id: r.id, username: r.username, privateKeyPem: r.privateKeyPem };
-  } else {
-    const targetId = typeof body.object === "string" ? body.object : (body.object as { id?: string })?.id;
-    if (targetId) {
-      const r = await getActorById(env.DB, targetId);
-      if (r?.privateKeyPem) recipient = { id: r.id, username: r.username, privateKeyPem: r.privateKeyPem };
-    }
   }
 
   try {
@@ -119,10 +125,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       baseUrl,
       signingActorId,
       signingKey,
+      queue: env.DELIVERY_QUEUE,
       ...(recipient ? { recipient } : {}),
     });
-  } catch {
+  } catch (err) {
     // Still return 202 so the remote server does not keep retrying.
+    console.error("[inbox] processInboxActivity failed:", err);
   }
 
   return json({ status: "accepted" }, 202);

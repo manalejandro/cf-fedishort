@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { activityJson, notFound } from "@/lib/cf";
 import { getActorByUsername, getFollowers } from "@/lib/db";
-import { buildOrderedCollection, buildOrderedCollectionPage, actorIRI } from "@/lib/activitypub/utils";
+import { buildOrderedCollection, buildOrderedCollectionPage } from "@/lib/activitypub/utils";
 import { env } from "cloudflare:workers";
 
 export async function GET(
@@ -16,7 +16,9 @@ export async function GET(
   if (!actor || !actor.isLocal) return notFound("Actor not found");
 
   const followers = await getFollowers(env.DB, actor.id);
-  const items = followers.map((f) => actorIRI(baseUrl, f.username));
+  // Real actor IRIs: remote followers keep their own id, never a fabricated
+  // local `/users/<username>` URL.
+  const items = followers.map((f) => f.id);
 
   const page = request.nextUrl.searchParams.get("page");
   if (page === "true") {

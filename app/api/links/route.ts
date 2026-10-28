@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { json, badRequest, unauthorized } from "@/lib/cf";
-import { getShortLinksByActor, createShortLink, createObject, getFollowerIds, getActorById, createActivity } from "@/lib/db";
+import { getShortLinksByActor, createShortLink, createObject, getFollowerIds, getActorById, createActivity, deleteObject, bumpActorCount } from "@/lib/db";
 import { generateId, buildLinkNote, buildCreate } from "@/lib/activitypub/utils";
 import { enqueueDeliveries } from "@/lib/activitypub/queue";
 import { collectFollowerInboxes } from "@/lib/activitypub/federation";
@@ -27,20 +27,33 @@ export async function POST(request: NextRequest): Promise<Response> {
   const session = await getSessionActor(env.DB, token);
   if (!session) return unauthorized();
 
-  const body = await request.json() as { url?: string; slug?: string; title?: string; description?: string };
+  let body: { url?: string; slug?: string; title?: string; description?: string };
+  try {
+    body = await request.json() as { url?: string; slug?: string; title?: string; description?: string };
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
 
   if (!body.url) return badRequest("URL is required");
 
   const targetUrl = body.url.trim();
-  if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))
+  if (targetUrl.length > 2048) return badRequest("URL too long (max 2048 characters)");
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return badRequest("Invalid URL");
+    }
+  } catch {
     return badRequest("Invalid URL");
+  }
 
   const slug = body.slug?.trim().toLowerCase() ?? generateId().slice(0, 8);
   if (!/^[a-z0-9-_]+$/.test(slug)) return badRequest("Slug can only contain letters, numbers, hyphens and underscores");
+  if (slug.length > 64) return badRequest("Slug too long (max 64 characters)");
 
-  // Check slug uniqueness
+  // Check slug uniqueness (the INSERT below is the authoritative guard).
   const existing = await env.DB.prepare("SELECT id FROM short_links WHERE slug = ?").bind(slug).first();
-  if (existing) return badRequest("Slug already taken");
+  if (existing) return json({ error: "Slug already taken" }, 409);
 
   const domain = new URL(request.url).hostname;
   const baseUrl = `https://${domain}`;
@@ -70,16 +83,27 @@ export async function POST(request: NextRequest): Promise<Response> {
     raw: JSON.stringify(note),
   });
 
-  await createShortLink(env.DB, {
-    id: linkId,
-    slug,
-    actorId: session.id,
-    url: targetUrl,
-    title: body.title,
-    description: body.description,
-    objectId,
-    published,
-  });
+  try {
+    await createShortLink(env.DB, {
+      id: linkId,
+      slug,
+      actorId: session.id,
+      url: targetUrl,
+      title: body.title,
+      description: body.description,
+      objectId,
+      published,
+    });
+  } catch (err) {
+    // UNIQUE(slug) collision: the pre-check above is racy, this is the guard.
+    // Remove the orphaned object so a retry with another slug stays clean.
+    await deleteObject(env.DB, objectId).catch(() => {});
+    if (String(err).includes("UNIQUE")) {
+      return json({ error: "Slug already taken" }, 409);
+    }
+    console.error("[links] createShortLink failed:", err);
+    return json({ error: "Failed to create link" }, 500);
+  }
 
   const create = buildCreate(baseUrl, session.id, note, generateId());
 
@@ -114,10 +138,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   }
 
-  await env.DB
-    .prepare("UPDATE actors SET links_count = links_count + 1 WHERE id = ?")
-    .bind(session.id)
-    .run();
+  await bumpActorCount(env.DB, session.id, "links_count", 1);
 
   return json({
     id: linkId,

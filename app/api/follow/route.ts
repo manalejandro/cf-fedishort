@@ -1,92 +1,141 @@
 import { type NextRequest } from "next/server";
 import { json, badRequest, unauthorized } from "@/lib/cf";
-import { getActorById, createFollow, getFollow, updateActorCounts, createNotification } from "@/lib/db";
-import { buildFollow, generateId } from "@/lib/activitypub/utils";
-import { deliverToInbox, fetchRemoteObject } from "@/lib/activitypub/federation";
 import { getSessionActor } from "@/lib/auth";
+import { generateId, buildFollow, activityIRI } from "@/lib/activitypub/utils";
+import {
+  getActorById,
+  getFollow,
+  createFollow,
+  deleteFollow,
+  createActivity,
+  createNotification,
+  bumpActorCount,
+} from "@/lib/db";
+import { deliverToInbox, fetchRemoteObject } from "@/lib/activitypub/federation";
+import { cacheRemoteActor, isLocalActorId } from "@/lib/activitypub/signer-key";
 import { env } from "cloudflare:workers";
+import type { APActor } from "@/lib/types";
 
-export async function POST(request: NextRequest): Promise<Response> {
-  const authHeader = request.headers.get("Authorization") ?? "";
-  const token = authHeader.replace("Bearer ", "");
-  if (!token) return unauthorized();
-  const session = await getSessionActor(env.DB, token);
+export async function GET(request: NextRequest): Promise<Response> {
+  const auth = request.headers.get("authorization")?.replace("Bearer ", "");
+  if (!auth) return unauthorized();
+  const session = await getSessionActor(env.DB, auth);
   if (!session) return unauthorized();
 
-  const { targetId } = await request.json() as { targetId?: string };
-  if (!targetId) return badRequest("Missing targetId");
+  const targetId = request.nextUrl.searchParams.get("targetId");
+  if (!targetId) return json({ following: false });
 
-  // Fetch the current local actor for signing
-  const localActor = await getActorById(env.DB, session.id);
-  if (!localActor || !localActor.privateKeyPem) return badRequest("Actor not found or no private key");
+  const follow = await getFollow(env.DB, session.id, targetId);
+  return json({ following: follow?.state === "accepted" });
+}
 
-  // Check if we already follow
-  const existing = await getFollow(env.DB, localActor.id, targetId);
-  if (existing && existing.state !== "rejected") {
-    return json({ error: "Already following or request pending" }, 409);
+export async function POST(request: NextRequest): Promise<Response> {
+  const auth = request.headers.get("authorization")?.replace("Bearer ", "");
+  if (!auth) return unauthorized();
+  const session = await getSessionActor(env.DB, auth);
+  if (!session) return unauthorized();
+
+  let targetId: string | undefined;
+  try {
+    ({ targetId } = (await request.json()) as { targetId?: string });
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
   }
+  if (!targetId || typeof targetId !== "string") return badRequest("targetId is required");
 
-  // Resolve/cache the target actor
+  let parsedTarget: URL;
+  try {
+    parsedTarget = new URL(targetId);
+  } catch {
+    return badRequest("targetId must be a valid URL");
+  }
+  if (parsedTarget.protocol !== "https:") return badRequest("targetId must be an https URL");
+  if (targetId === session.id) return badRequest("Cannot follow yourself");
+
+  const baseUrl = env.INSTANCE_URL;
+  const me = await getActorById(env.DB, session.id);
+  if (!me?.privateKeyPem) return unauthorized();
+
   let targetActor = await getActorById(env.DB, targetId);
-  if (!targetActor) {
-    // Try to fetch remote actor
-    const fetched = await fetchRemoteObject(targetId) as { id: string; preferredUsername: string; inbox?: string; endpoints?: { sharedInbox?: string }; publicKey?: { publicKeyPem: string }; name?: string; summary?: string; icon?: { url?: string }; image?: { url?: string } } | null;
-    if (!fetched?.publicKey?.publicKeyPem) return badRequest("Could not resolve target actor");
 
-    const domain = new URL(fetched.id).hostname;
-    await env.DB
-      .prepare("INSERT OR REPLACE INTO actors (id, username, domain, display_name, summary, avatar_url, header_url, public_key_pem, inbox, shared_inbox, is_local, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))")
-      .bind(fetched.id, fetched.preferredUsername, domain, fetched.name ?? null, fetched.summary ?? null, fetched.icon?.url ?? null, fetched.image?.url ?? null, fetched.publicKey.publicKeyPem, fetched.inbox ?? null, fetched.endpoints?.sharedInbox ?? null)
-      .run();
+  if (!targetActor) {
+    // Never fetch (or cache) documents for our own domain: the actor simply
+    // does not exist locally.
+    if (isLocalActorId(targetId)) return badRequest("Target actor not found");
+
+    const fetched = (await fetchRemoteObject(targetId)) as APActor | null;
+    if (!fetched?.publicKey?.publicKeyPem) return badRequest("Could not resolve remote actor");
+    // The served document must be the actor we asked for, and must not claim
+    // a local id (cacheRemoteActor rejects local ids as a second line).
+    if (fetched.id !== targetId) return badRequest("Remote actor id does not match");
+    await cacheRemoteActor(env.DB, fetched);
     targetActor = await getActorById(env.DB, targetId);
   }
-  if (!targetActor?.inbox) return badRequest("Target actor has no inbox");
+
+  if (!targetActor) return badRequest("Target actor not found");
+
+  const existing = await getFollow(env.DB, session.id, targetId);
+  if (existing) {
+    if (existing.state === "accepted") return json({ message: "Already following", following: true });
+    if (existing.state === "pending") return json({ message: "Follow request still pending", following: false });
+    // "rejected" (or any other state): allow a fresh attempt by replacing the
+    // row (inserting on top of it would trip UNIQUE(actor_id, target_id)).
+    await deleteFollow(env.DB, session.id, targetId);
+  }
 
   const followId = generateId();
-  const followActivity = buildFollow(env.INSTANCE_URL || `https://${session.domain}`, localActor.id, targetId, followId);
+  const followActivity = buildFollow(baseUrl, session.id, targetId, followId);
+  const isLocalTarget = Boolean(targetActor.isLocal);
 
-  // Store as pending
-  await createFollow(env.DB, {
-    id: followId,
-    actorId: localActor.id,
-    targetId,
-    state: "pending",
-    activityId: followActivity.id,
+  try {
+    await createFollow(env.DB, {
+      id: followId,
+      actorId: session.id,
+      targetId,
+      state: isLocalTarget ? "accepted" : "pending",
+      activityId: activityIRI(baseUrl, followId),
+    });
+  } catch {
+    // Race on UNIQUE(actor_id, target_id): a concurrent request already
+    // created the row.
+    return json({ message: "Follow request still pending", following: false });
+  }
+
+  await createActivity(env.DB, {
+    id: activityIRI(baseUrl, followId),
+    type: "Follow",
+    actorId: session.id,
+    objectId: targetId,
+    toList: JSON.stringify([targetId]),
+    ccList: "[]",
+    raw: JSON.stringify(followActivity),
+    isLocal: true,
   });
 
-  // Deliver to target's inbox
-  await deliverToInbox(
-    targetActor.inbox,
-    followActivity,
-    `${localActor.id}#main-key`,
-    localActor.privateKeyPem
-  );
-
-  // If the target is local, the inbox handler will auto-accept. But since we're
-  // delivering directly (not through the inbox), we need to handle local follows here.
-  if (targetActor.isLocal) {
-    // Auto-accept local follows
-    await env.DB
-      .prepare("UPDATE follows SET state = 'accepted' WHERE id = ?")
-      .bind(followId)
-      .run();
-    await updateActorCounts(env.DB, localActor.id, { followingCount: (localActor.followingCount ?? 0) + 1 });
-    const target = await getActorById(env.DB, targetId);
-    if (target) {
-      await updateActorCounts(env.DB, targetId, { followersCount: (target.followersCount ?? 0) + 1 });
-    }
-    // Notify the target
+  if (isLocalTarget) {
+    // Local follow: accepted immediately — count it and notify the target.
+    // No HTTP delivery (a self-fetch would time out and the inbox dedup would
+    // drop it anyway). Remote follows stay "pending" and are counted by
+    // handleAccept when the remote Accept arrives.
+    await bumpActorCount(env.DB, session.id, "following_count", 1);
+    await bumpActorCount(env.DB, targetId, "followers_count", 1);
     await createNotification(env.DB, {
       id: generateId(),
       type: "follow",
-      accountId: localActor.id,
+      accountId: session.id,
       targetAccountId: targetId,
     });
+    return json({ message: "Followed", following: true });
   }
 
-  return json({
-    followId,
-    state: targetActor.isLocal ? "accepted" : "pending",
-    targetId,
-  }, 201);
+  const inbox = targetActor.inbox || `${targetActor.id}/inbox`;
+  try {
+    await deliverToInbox(inbox, followActivity, `${session.id}#main-key`, me.privateKeyPem);
+  } catch (err) {
+    console.error("[follow] Delivery error:", err);
+    // Keep the pending row: the remote may still have received it, and Undo
+    // works either way.
+  }
+
+  return json({ message: "Follow sent", following: false });
 }

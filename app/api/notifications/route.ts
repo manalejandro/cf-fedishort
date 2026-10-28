@@ -11,8 +11,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const session = await getSessionActor(env.DB, token);
   if (!session) return unauthorized();
 
-  const limit = Math.min(parseInt(request.nextUrl.searchParams.get("limit") ?? "30"), 100);
-  const offset = parseInt(request.nextUrl.searchParams.get("offset") ?? "0");
+  const rawLimit = parseInt(request.nextUrl.searchParams.get("limit") ?? "30", 10);
+  const rawOffset = parseInt(request.nextUrl.searchParams.get("offset") ?? "0", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 30;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.trunc(rawOffset) : 0;
 
   // Fetch notifications and enrich with actor info
   const notifs = await getNotifications(env.DB, session.id, limit, offset);

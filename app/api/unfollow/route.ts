@@ -1,53 +1,61 @@
 import { type NextRequest } from "next/server";
 import { json, badRequest, unauthorized } from "@/lib/cf";
-import { getActorById, getFollow, deleteFollow, updateActorCounts } from "@/lib/db";
-import { buildUndo, buildFollow, generateId } from "@/lib/activitypub/utils";
-import { deliverToInbox } from "@/lib/activitypub/federation";
 import { getSessionActor } from "@/lib/auth";
+import { generateId, buildFollow, buildUndo } from "@/lib/activitypub/utils";
+import { getActorById, getFollow, deleteFollow, bumpActorCount } from "@/lib/db";
+import { deliverToInbox } from "@/lib/activitypub/federation";
 import { env } from "cloudflare:workers";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const authHeader = request.headers.get("Authorization") ?? "";
-  const token = authHeader.replace("Bearer ", "");
-  if (!token) return unauthorized();
-  const session = await getSessionActor(env.DB, token);
+  const auth = request.headers.get("authorization")?.replace("Bearer ", "");
+  if (!auth) return unauthorized();
+  const session = await getSessionActor(env.DB, auth);
   if (!session) return unauthorized();
 
-  const { targetId } = await request.json() as { targetId?: string };
-  if (!targetId) return badRequest("Missing targetId");
-
-  const localActor = await getActorById(env.DB, session.id);
-  if (!localActor || !localActor.privateKeyPem) return badRequest("Actor not found");
-
-  const existing = await getFollow(env.DB, localActor.id, targetId);
-  if (!existing) return json({ error: "Not following this user" }, 404);
-
-  // Build Undo{Follow} activity
-  const originalFollow = buildFollow(env.INSTANCE_URL || `https://${session.domain}`, localActor.id, targetId, existing.activityId ?? generateId());
-  const undoId = generateId();
-  const undoActivity = buildUndo(env.INSTANCE_URL || `https://${session.domain}`, localActor.id, originalFollow, undoId);
-
-  // Delete local follow record
-  await deleteFollow(env.DB, localActor.id, targetId);
-
-  // Update counts
-  const target = await getActorById(env.DB, targetId);
-  if (localActor.isLocal) {
-    await updateActorCounts(env.DB, localActor.id, { followingCount: Math.max(0, (localActor.followingCount ?? 0) - 1) });
+  let targetId: string | undefined;
+  try {
+    ({ targetId } = (await request.json()) as { targetId?: string });
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
   }
-  if (target && target.isLocal) {
-    await updateActorCounts(env.DB, targetId, { followersCount: Math.max(0, (target.followersCount ?? 0) - 1) });
+  if (!targetId) return badRequest("targetId is required");
+
+  const baseUrl = env.INSTANCE_URL;
+  const me = await getActorById(env.DB, session.id);
+  if (!me) return unauthorized();
+
+  const follow = await getFollow(env.DB, session.id, targetId);
+  if (!follow) return json({ message: "Not following", following: false });
+
+  const wasAccepted = follow.state === "accepted";
+
+  // The Undo must embed the ORIGINAL Follow activity (same id), otherwise
+  // strict implementations discard it. follows.activity_id stores the full
+  // IRI `${baseUrl}/activities/<uuid>` — rebuild with the same uuid instead
+  // of passing the whole IRI back into buildFollow (which prefixes it again).
+  const originalUuid = follow.activityId
+    ? follow.activityId.split("/").pop() || generateId()
+    : generateId();
+  const followActivity = buildFollow(baseUrl, session.id, targetId, originalUuid);
+  const undoActivity = buildUndo(baseUrl, session.id, followActivity, generateId());
+
+  await deleteFollow(env.DB, session.id, targetId);
+
+  // Only an accepted follow ever bumped the counters.
+  if (wasAccepted) {
+    await bumpActorCount(env.DB, session.id, "following_count", -1);
+    await bumpActorCount(env.DB, targetId, "followers_count", -1);
   }
 
-  // Deliver to target's inbox if remote
-  if (target?.inbox && !target.isLocal) {
-    await deliverToInbox(
-      target.inbox,
-      undoActivity,
-      `${localActor.id}#main-key`,
-      localActor.privateKeyPem
-    );
+  const targetActor = await getActorById(env.DB, targetId);
+  if (targetActor && !targetActor.isLocal && me.privateKeyPem) {
+    const inbox = targetActor.inbox || `${targetActor.id}/inbox`;
+    try {
+      await deliverToInbox(inbox, undoActivity, `${session.id}#main-key`, me.privateKeyPem);
+    } catch (err) {
+      console.error("[unfollow] Delivery error:", err);
+    }
   }
 
-  return json({ success: true });
+  return json({ message: "Unfollowed", following: false });
 }

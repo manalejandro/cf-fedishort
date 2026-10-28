@@ -7,8 +7,15 @@ import handler from "vinext/server/fetch-handler";
 import { postToInboxSigned, validateOutboundUrl } from "../lib/activitypub/federation";
 import type { APDeliveryMessage } from "../lib/activitypub/queue";
 
-/** Permanent HTTP failure codes — don't retry, just ack. */
-const PERMANENT_ERRORS = new Set([400, 401, 403, 404, 410, 422]);
+/**
+ * Permanent HTTP failure codes — don't retry, just ack.
+ * 401 is deliberately absent: signature failures are usually transient
+ * (clock skew, key rotation on the remote) and deserve a retry.
+ */
+const PERMANENT_ERRORS = new Set([400, 403, 404, 410, 422]);
+
+/** Workers Queues caps `retry({ delaySeconds })` at 12 hours. */
+const MAX_RETRY_DELAY_SECONDS = 43_200;
 
 interface Env {
   DB: D1Database;
@@ -20,10 +27,12 @@ interface Env {
 function parseRetryAfter(header: string | null): number | null {
   if (!header) return null;
   const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.ceil(seconds), 86_400);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.ceil(seconds), MAX_RETRY_DELAY_SECONDS);
+  }
   const date = Date.parse(header);
   if (Number.isFinite(date)) {
-    return Math.max(0, Math.min(Math.ceil((date - Date.now()) / 1000), 86_400));
+    return Math.max(0, Math.min(Math.ceil((date - Date.now()) / 1000), MAX_RETRY_DELAY_SECONDS));
   }
   return null;
 }
@@ -65,6 +74,7 @@ async function deliverOne(
     await res.body?.cancel().catch(() => {});
     return {
       ok: res.ok,
+      // 401 is often transient (clock skew, key rotation on the remote) — retry.
       permanent: PERMANENT_ERRORS.has(res.status),
       status: res.status,
       retryAfter: parseRetryAfter(res.headers.get("Retry-After")) ?? undefined,
@@ -88,7 +98,14 @@ const worker = {
       try {
         const { ok, permanent, retryAfter } = await deliverOne(inboxUrl, activityJson, actorId, env);
         if (ok || permanent) message.ack();
-        else message.retry({ delaySeconds: retryAfter ?? Math.min(60 * message.attempts, 3600) });
+        else {
+          message.retry({
+            delaySeconds: Math.min(
+              retryAfter ?? Math.min(60 * message.attempts, 3600),
+              MAX_RETRY_DELAY_SECONDS
+            ),
+          });
+        }
       } catch {
         message.retry();
       }

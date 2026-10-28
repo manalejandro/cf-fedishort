@@ -9,7 +9,7 @@ Acorta URLs y compártelas a través del fediverso. Cada enlace corto es una Not
 - **Federación ActivityPub** — Cada enlace corto es una Nota federada. Los seguidores ven tus enlaces en su línea de tiempo.
 - **Acortador de URLs** — Crea enlaces cortos y memorables con slugs personalizados.
 - **Bilingüe** — Interfaz en inglés y español.
-- **Stack Cloudflare** — Construido con Next.js, base de datos D1, Workers Queues, y desplegado vía OpenNext.
+- **Stack Cloudflare** — Construido con Next.js, base de datos D1, Workers Queues, y desplegado vía vinext.
 - **Código Abierto** — Código fuente completo bajo MIT.
 
 ## Stack Tecnológico
@@ -19,7 +19,7 @@ Acorta URLs y compártelas a través del fediverso. Cada enlace corto es una Not
 | Framework  | Next.js 16                          |
 | Base de Datos | Cloudflare D1 (SQLite)          |
 | Cola       | Cloudflare Workers Queues           |
-| Runtime    | Cloudflare Workers (vía OpenNext)   |
+| Runtime    | Cloudflare Workers (vía vinext)     |
 | Estilos    | Tailwind CSS v4                     |
 | Auth       | PBKDF2 hashing de contraseñas + sesiones |
 | Federación | ActivityPub (WebFinger, HTTP Signatures) |
@@ -74,7 +74,7 @@ wrangler queue create cf-fedishort-delivery
 Configura los secretos:
 
 ```bash
-wrangler secret put TURNSTILE_SECRET
+wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
 ### Desarrollo
@@ -89,7 +89,7 @@ npm run dev
 npm run deploy
 ```
 
-Esto ejecuta `opennextjs-cloudflare build && wrangler deploy`.
+Esto ejecuta `vinext-cloudflare deploy`.
 
 ## Estructura del Proyecto
 
@@ -111,12 +111,12 @@ cf-fedishort/
 │   ├── activitypub/        # Núcleo de ActivityPub (seguridad, utils, federación, inbox, vocabulario, cola)
 │   ├── db/                 # Esquema de base de datos D1 y capa de acceso
 │   ├── i18n/               # Diccionario de internacionalización
+│   ├── ratelimit.ts        # Rate limiter basado en D1 para endpoints sensibles
 │   └── types/              # Tipos TypeScript
 ├── src/
 │   └── worker.ts           # Punto de entrada del Worker Cloudflare + consumidor de cola
-├── middleware.ts            # Middleware Next.js para CORS y reescritura de URLs
+├── proxy.ts                 # Proxy de Next.js (middleware) para CORS y reescritura de URLs
 ├── next.config.ts           # Configuración de Next.js
-├── open-next.config.ts      # Configuración del adaptador OpenNext Cloudflare
 └── wrangler.toml            # Configuración de Cloudflare Workers
 ```
 
@@ -143,6 +143,7 @@ cf-fedishort/
 |---|---|
 | `POST /api/auth/register` | Registrar un nuevo usuario |
 | `POST /api/auth/login` | Iniciar sesión |
+| `POST /api/auth/logout` | Cerrar sesión (revoca la sesión del token) |
 | `GET /api/links` | Obtener enlaces del usuario (auth requerida) |
 | `POST /api/links` | Crear un enlace corto (auth requerida) |
 | `GET /l/:slug` | Redirigir a la URL original |
